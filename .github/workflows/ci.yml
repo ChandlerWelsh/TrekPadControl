@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  checks:
+    name: Preflight (Python tests and static checks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install bleak pyyaml pillow
+      - run: python scripts/preflight.py
+
+  ios:
+    name: iOS simulator build and tests (unsigned)
+    needs: checks
+    runs-on: xcode-27
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: ios
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode 27.1
+        run: |
+          sudo xcode-select -s /Applications/Xcode_27.1.app
+          xcodebuild -version
+
+      - name: Generate the Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Build and run tests on a simulator
+        run: |
+          set -o pipefail
+          mkdir -p build
+          udid=$(xcrun simctl list devices available -j | python3 -c "
+          import json, sys
+          devs = json.load(sys.stdin)['devices']
+          print(next(d['udid'] for rt, ds in sorted(devs.items(), reverse=True) if 'iOS' in rt for d in ds if d['name'].startswith('iPhone')))")
+          echo "Simulator: $udid"
+          xcodebuild test \
+            -project TrekPad.xcodeproj \
+            -scheme TrekPad \
+            -destination "id=$udid" \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            | tee build/xcodebuild.log | grep -E "error:|warning: .*TrekPad|Test Case .* (passed|failed)|Executed|TEST (SUCCEEDED|FAILED)" || true
+          grep -q "TEST SUCCEEDED" build/xcodebuild.log
+
+      - name: Check the app bundle
+        run: |
+          app=$(find build/DerivedData/Build/Products -maxdepth 2 -name TrekPad.app | head -1)
+          for key in NSBluetoothAlwaysUsageDescription NSHealthUpdateUsageDescription UIBackgroundModes; do
+            /usr/libexec/PlistBuddy -c "Print :$key" "$app/Info.plist" > /dev/null || { echo "missing $key"; exit 1; }
+          done
+          test -f "$app/Assets.car" || { echo "missing Assets.car (app icon)"; exit 1; }
+
+      - name: Upload build log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-log
+          path: ios/build/xcodebuild.log
