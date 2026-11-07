@@ -1,0 +1,174 @@
+# TrekPad Control
+
+A small Windows app for controlling a **NovaWalk W50 TrekPad** walking pad (Merach, Bluetooth
+name `MRK-T25-xxxx`) from a PC instead of the phone app. It can:
+
+- **Start, stop, and change speed and incline** from a window, global keyboard shortcuts, or a
+  local HTTP API
+- **Show live stats**: speed, incline, time, distance and calories
+- **Record each walk** and **sync it to Apple Health** through an iPhone Shortcut
+- **Fix a firmware bug** where changing incline also raises the speed (see [Safety](#safety))
+
+No reverse engineering of the Merach app was needed. The pad speaks standard Bluetooth FTMS
+(Fitness Machine Service), with a couple of quirks documented in
+[research/FINDINGS.md](research/FINDINGS.md).
+
+> **Unofficial.** Not affiliated with Merach. Use at your own risk, and keep the pad's remote
+> within reach.
+
+## Requirements
+
+- Windows 10/11 with Bluetooth LE (most built-in Intel/Realtek adapters work)
+- Python 3.11+ ([python.org](https://www.python.org/downloads/), with the default *tcl/tk* option)
+- The Merach phone app must be **closed** (or phone Bluetooth off). The pad accepts one
+  connection at a time.
+
+## Install and run
+
+```powershell
+git clone https://github.com/ChandlerWelsh/TrekPadControl.git
+cd TrekPadControl
+python -m pip install -r requirements.txt
+```
+
+Double-click **`TrekPad.pyw`** to start it without a console window, or run
+`python -m trekpad.main` to see log output.
+
+On first run it scans for a device named `MRK-…` that offers FTMS, then remembers its address.
+Settings, the workout database and the log live in `%APPDATA%\TrekPadControl\`.
+
+The first time it runs, Windows may ask whether Python can use the network. Allow it on
+**private networks** so your iPhone can reach it for Apple Health sync.
+
+## Using it
+
+- **Speed gauge:** click (or drag and release) anywhere on the ring to jump to that speed. Hovering
+  shows the speed you'd get before you click.
+- **Incline bars:** click a bar to go straight to that incline (0–12%).
+- **− / +** buttons fine-tune by 0.1 mph or 1%.
+- **Desk strip:** the icon next to minimize shrinks the app to a slim bar that stays on top of your
+  other windows. The arrows icon on the strip expands it again.
+- **Settings** (gear icon): theme (system, light or dark), max speed, the phone link, and the
+  Apple Health address and token.
+- **Phone remote:** *Settings → Copy phone link*, then open it on your phone (same Wi-Fi). The same
+  interface runs in the phone's browser.
+
+| Action | Window | Global shortcut (any app) |
+|---|---|---|
+| Start | **Start** | `Ctrl+Alt+Home` |
+| **Stop** | **Stop**, `Space` or `Esc` | `Ctrl+Alt+End` |
+| Speed | click the gauge, − / +, `↑` / `↓` | `Ctrl+Alt+PgUp` / `PgDn` (±0.1) |
+| Incline | click a bar, − / +, `→` / `←` | `Ctrl+Alt+Shift+PgUp` / `PgDn` (±1) |
+
+Shortcuts, steps, presets and the max speed can be changed in `%APPDATA%\TrekPadControl\config.json`
+(restart the app afterwards). I avoided `Ctrl+Alt+arrows` because some Intel graphics drivers use
+them to rotate the screen.
+
+Speed and incline commands only work while the belt is running. Press Start first.
+
+## Safety
+
+- **Incline bug workaround:** on this firmware, every incline change makes the pad multiply its
+  speed by about 1.6 (1.0 → 1.6 → 2.5 mph…). After each incline change made *from this app*, it
+  waits for the pad to confirm the incline and then resends your speed, which usually lands within
+  about 1.5 s. It keeps watching for 5 seconds and stops the belt if the speed won't settle.
+  Changes made with the pad's own remote aren't affected by this logic.
+- **Max speed:** the app never asks for more than the max speed you set, and pulls the speed back
+  if the remote goes above it.
+- **Closing the app** while the belt is moving asks whether to stop the belt first.
+- **If the app crashes or Bluetooth drops,** the pad keeps going at its current speed, so use the
+  remote. The app reconnects automatically.
+
+## Apple Health sync (iPhone Shortcut)
+
+Apple Health only accepts data from apps on your iPhone or Watch, so the PC saves each walk and an
+iPhone Shortcut copies new ones into Health. Your iPhone and PC need to be on the **same Wi-Fi**.
+
+A walk is saved when the belt has been stopped for 90 seconds (a short break stays part of the
+same walk). Walks under 60 seconds aren't saved.
+
+### Build the Shortcut (one time)
+
+In the window, use **Copy address** and **Copy token**, and send them to your phone (for example
+with a note or email to yourself). Then in the **Shortcuts** app create a new shortcut named
+*Log TrekPad Walks*:
+
+1. **Get Contents of URL**
+   - URL: `<address>/api/workouts?unsynced=1` (for example `http://192.168.50.44:8765/api/workouts?unsynced=1`)
+   - Method: GET. Headers: `X-Token` = `<token>`
+2. **Get Dictionary Value**: get the value for key `workouts` in *Contents of URL*
+3. **Repeat with Each** item in *Dictionary Value*:
+   1. **Get Dictionary Value**: `start_local` from *Repeat Item*, then **Get Dates from Input**
+      on it (it becomes a date)
+   2. **Get Dictionary Value**: `duration_min`, `distance_mi` and `kcal` from *Repeat Item*
+      (three actions, or use the Repeat Item's magic variable directly)
+   3. **Log Workout** (Health): Type **Walking**, Start Date = *Dates*, Duration = `duration_min`
+      minutes, Distance = `distance_mi` miles, Active Energy = `kcal` kcal. Turn on any of these
+      that are hidden under *Show More*. The first run asks for Health permission.
+   4. **Get Contents of URL**: `<address>/api/workouts/` + *Repeat Item → id* + `/synced`.
+      Method **POST**, header `X-Token` = `<token>`. This marks the walk as done so it's never
+      logged twice.
+4. *(optional)* **Show Notification**: "Logged *Count of Dictionary Value* walk(s) to Health"
+
+The first time it runs, iOS asks to let Shortcuts find devices on your **local network**. Allow it.
+
+### Run it automatically
+
+- **Shortcuts → Automation → + → Time of Day** (for example 9:00 PM daily) → *Run Immediately* →
+  *Log TrekPad Walks*. It catches up on any walks that haven't synced yet.
+- Or **NFC**: put a cheap NFC sticker on the pad and make an NFC automation, so you tap your phone
+  on it when you finish.
+- Or add the shortcut to your Home Screen or a widget.
+
+### Apple Watch
+
+If you **start an Indoor Walk workout on your Watch** while walking, Health will show the same walk
+twice: the Watch's workout and the pad's. Pick one approach:
+
+- **Let the pad log it (recommended).** Don't start a Watch workout. The pad's treadmill distance is
+  more accurate than arm-swing estimates, and the Watch still records background heart rate, which
+  Health shows during the logged workout.
+- **Let the Watch log it.** Start an Indoor Walk on the Watch for continuous heart rate and rings
+  credit, and don't run the Shortcut, or delete the Log Workout step.
+
+## Local HTTP API
+
+The app listens on port `8765` on your local network. Every `/api` call needs the token, either as
+header `X-Token: <token>` or as `?token=<token>`. Control commands are `POST`.
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/status` | live state, connection, workouts waiting |
+| POST | `/api/start`, `/api/stop` | |
+| POST | `/api/speed?mph=2.0` | 0.6–max |
+| POST | `/api/speed/up`, `/api/speed/down` | optional `?step=0.2` |
+| POST | `/api/incline?pct=4` | 0–12 |
+| POST | `/api/incline/up`, `/api/incline/down` | optional `?step=2` |
+| GET | `/api/workouts` | `?unsynced=1` for only walks not yet in Health |
+| POST | `/api/workouts/<id>/synced` | mark as logged |
+
+```powershell
+curl.exe -X POST -H "X-Token: <token>" "http://localhost:8765/api/speed?mph=2.0"
+```
+
+This is plain HTTP for your home network. Anyone on your Wi-Fi who has the token can control the
+pad, so don't forward the port to the internet. To change the token, delete `api_token` from
+`config.json` and restart.
+
+## Development
+
+```powershell
+python -m unittest discover -s tests -t .
+```
+
+- `trekpad/ftms.py`: protocol (parsing and commands, quirks documented at the top)
+- `trekpad/pad.py`: Bluetooth connection, commands, incline-bug workaround, speed watchdog
+- `trekpad/workouts.py`: walk recording and storage
+- `trekpad/ui/`: the interface (HTML/CSS/JS), served by the local server and shown in a frameless
+  pywebview (Edge WebView2) window
+- `trekpad/api.py`, `trekpad/hotkeys.py`, `trekpad/main.py`
+- `research/`: the scan, GATT-dump and live-test scripts used to work out the protocol
+
+## License
+
+MIT
