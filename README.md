@@ -67,7 +67,7 @@ The first time it runs, Windows may ask whether Python can use the network. Allo
 | Speed | click the gauge, − / +, `↑` / `↓` | `Ctrl+Alt+PgUp` / `PgDn` (±0.1) |
 | Incline | click a bar, − / +, `→` / `←` | `Ctrl+Alt+Shift+PgUp` / `PgDn` (±1) |
 
-Shortcuts, steps, presets and the max speed can be changed in `%APPDATA%\TrekPadControl\config.json`
+Shortcuts, steps, presets, the max speed and your weight can be changed in `%APPDATA%\TrekPadControl\config.json`
 (restart the app afterwards). I avoided `Ctrl+Alt+arrows` because some Intel graphics drivers use
 them to rotate the screen.
 
@@ -85,6 +85,25 @@ Speed and incline commands only work while the belt is running. Press Start firs
 - **Closing the app** while the belt is moving asks whether to stop the belt first.
 - **If the app crashes or Bluetooth drops,** the pad keeps going at its current speed, so use the
   remote. The app reconnects automatically.
+
+## Calories
+
+Choose where the calorie number comes from in *Settings → Calories*, or in `config.json`:
+
+| Setting | Default | |
+|---|---|---|
+| `calorie_source` | `"weight"` | `"weight"`: work it out from your weight. `"pad"`: use the pad's own number |
+| `weight_lb` | `187` | Your weight in pounds (also adjustable with − / + in Settings) |
+
+**From your weight** uses the ACSM walking equation with the pad's measured distance and the incline
+at each moment: about 0.1 ml O₂ per kg per metre on the flat, plus 1.8 × grade per metre uphill,
+at 5 kcal per litre of O₂. It leaves out resting metabolism, because Apple Health already logs that
+as *Resting Energy*, so the number matches Health's **Active Energy**. At 187 lb that's about
+68 kcal per flat mile, and more on an incline. The pad doesn't know your weight, so its own number
+is only a rough guess.
+
+The live Calories tile, the saved walks and the Shortcut all use the chosen number. Each saved walk
+also keeps the pad's number as `pad_kcal`, so you can compare the two.
 
 ## Apple Health sync (iPhone Shortcut)
 

@@ -20,6 +20,7 @@ from urllib.parse import parse_qs, urlparse
 from . import __version__, config
 from .ftms import PAD_MAX_MPH, PAD_MIN_MPH
 from .pad import PadError
+from .workouts import CALORIE_SOURCES, weight_kg_from_config
 
 log = logging.getLogger(__name__)
 
@@ -29,6 +30,7 @@ STATIC = {"/": ("index.html", "text/html; charset=utf-8"),
           "/style.css": ("style.css", "text/css; charset=utf-8"),
           "/app.js": ("app.js", "application/javascript; charset=utf-8")}
 THEMES = ("system", "light", "dark")
+MIN_WEIGHT_LB, MAX_WEIGHT_LB = 50, 600
 
 
 class ApiServer:
@@ -48,6 +50,7 @@ class ApiServer:
     def settings(self) -> dict:
         return {"theme": self.cfg.get("theme", "system"), "max_speed_mph": self.cfg["max_speed_mph"],
                 "speed_step_mph": self.cfg["speed_step_mph"], "incline_step_pct": self.cfg["incline_step_pct"],
+                "calorie_source": self.cfg.get("calorie_source", "weight"), "weight_lb": self.cfg.get("weight_lb"),
                 "version": __version__, **self.info}
 
     def _handler_class(self):
@@ -118,6 +121,10 @@ class ApiServer:
                     s = pad.snapshot()
                     s.update(recording_workout=api.recorder.active,
                              workouts_waiting_for_health=api.store.count_unsynced())
+                    s["pad_kcal"] = s.get("kcal", 0)
+                    est = api.recorder.live_kcal()
+                    if est is not None:
+                        s["kcal"] = est
                     return self._json(200, s)
                 if path == "/api/settings":
                     if method == "POST":
@@ -129,6 +136,16 @@ class ApiServer:
                             v = round(min(max(float(p["max_speed_mph"]), PAD_MIN_MPH), PAD_MAX_MPH), 1)
                             cfg["max_speed_mph"] = v
                             pad.max_mph = v
+                        if "calorie_source" in p:
+                            if p["calorie_source"] not in CALORIE_SOURCES:
+                                raise ValueError("calorie_source")
+                            cfg["calorie_source"] = p["calorie_source"]
+                        if "weight_lb" in p:
+                            v = round(float(p["weight_lb"]))
+                            if not MIN_WEIGHT_LB <= v <= MAX_WEIGHT_LB:
+                                raise ValueError("weight_lb")
+                            cfg["weight_lb"] = v
+                        api.recorder.weight_kg = weight_kg_from_config(cfg)
                         config.save(cfg)
                     return self._json(200, api.settings())
                 if method == "GET" and path == "/api/workouts":

@@ -126,6 +126,20 @@
       </div>
     </div>
     <div>
+      <div class="label">Calories</div>
+      <div class="seg two" id="kcal-seg">
+        <button data-src="weight">From my weight</button><button data-src="pad">Pad's number</button>
+      </div>
+    </div>
+    <div class="setrow" id="weight-row">
+      <div><div>Weight (lb)</div><div class="small">Used with distance and incline for the calories sent to Health</div></div>
+      <div class="inc-steps num">
+        <button class="step" id="wt-down" aria-label="Lower weight"><svg class="i"><use href="#i-minus"/></svg></button>
+        <span class="maxv" id="wt-val">–</span>
+        <button class="step" id="wt-up" aria-label="Raise weight"><svg class="i"><use href="#i-plus"/></svg></button>
+      </div>
+    </div>
+    <div>
       <div class="label">Phone remote</div>
       <div class="small">Open this link on your phone (same Wi-Fi) to control the pad from there.</div>
       <button class="wide" id="copy-phone">Copy phone link</button>

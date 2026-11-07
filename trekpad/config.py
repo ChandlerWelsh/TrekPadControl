@@ -19,6 +19,8 @@ DEFAULTS = {
     "api_token": "",               # generated on first run
     "min_workout_seconds": 60,     # shorter sessions aren't saved
     "workout_end_idle_seconds": 90,  # belt stopped this long -> workout finished
+    "calorie_source": "weight",    # weight: work calories out from weight_lb | pad: use the pad's number
+    "weight_lb": 187,
     "hotkeys": {
         "speed_up": "ctrl+alt+page_up",
         "speed_down": "ctrl+alt+page_down",

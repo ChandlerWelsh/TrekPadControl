@@ -21,7 +21,7 @@ from .api import ApiServer
 from .hotkeys import Hotkeys, pretty
 from .pad import PadController
 from .win32window import Win32Window
-from .workouts import WorkoutRecorder, WorkoutStore
+from .workouts import WorkoutRecorder, WorkoutStore, weight_kg_from_config
 
 log = logging.getLogger("trekpad")
 WINDOW_TITLE = "TrekPad"
@@ -144,7 +144,8 @@ def main():
     log.info("TrekPad Control starting")
 
     store = WorkoutStore(config.APP_DIR / "workouts.db")
-    recorder = WorkoutRecorder(store, cfg["min_workout_seconds"], cfg["workout_end_idle_seconds"])
+    recorder = WorkoutRecorder(store, cfg["min_workout_seconds"], cfg["workout_end_idle_seconds"],
+                               weight_kg=weight_kg_from_config(cfg))
 
     def remember_address(addr):
         cfg["address"] = addr

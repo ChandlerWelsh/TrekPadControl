@@ -12,6 +12,36 @@ from .ftms import METERS_PER_MILE
 
 log = logging.getLogger(__name__)
 
+KG_PER_LB = 0.45359237
+KCAL_PER_L_O2 = 5.0  # standard ACSM conversion
+CALORIE_SOURCES = ("weight", "pad")
+
+
+def walking_o2_ml_per_kg(distance_m: float, incline_pct: float) -> float:
+    """Oxygen used above resting for walking `distance_m` at `incline_pct`, per kg of body weight.
+
+    ACSM walking equation: VO2 = 0.1*S + 1.8*S*G + 3.5 (ml/kg/min, S in m/min, G as a fraction).
+    The 3.5 is resting metabolism, which Apple Health counts separately as Resting Energy, so it is
+    left out to get Active Energy. Multiplying the per-minute rate by time gives a total that only
+    depends on distance, so the pad's measured distance is used directly.
+    """
+    return distance_m * (0.1 + 1.8 * max(incline_pct, 0.0) / 100)
+
+
+def o2_to_kcal(o2_ml_per_kg: float, weight_kg: float) -> float:
+    return o2_ml_per_kg * weight_kg / 1000 * KCAL_PER_L_O2
+
+
+def weight_kg_from_config(cfg: dict) -> float | None:
+    """Body weight in kg when calories should come from your weight, None to use the pad's number."""
+    if cfg.get("calorie_source", "weight") != "weight":
+        return None
+    try:
+        lb = float(cfg.get("weight_lb") or 0)
+    except (TypeError, ValueError):
+        return None
+    return lb * KG_PER_LB if lb > 0 else None
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS workouts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -19,7 +49,8 @@ CREATE TABLE IF NOT EXISTS workouts (
     end TEXT NOT NULL,
     duration_s INTEGER NOT NULL,  -- belt-moving time from the pad
     distance_m INTEGER NOT NULL,
-    kcal INTEGER NOT NULL,
+    kcal INTEGER NOT NULL,        -- the number sent to Health (from your weight, or the pad's)
+    pad_kcal INTEGER,             -- the pad's own number, kept for comparison
     max_incline_pct REAL NOT NULL,
     avg_incline_pct REAL NOT NULL,
     synced_at TEXT                -- set when the iPhone Shortcut has logged it to Health
@@ -32,6 +63,9 @@ class WorkoutStore:
         self.path = str(path)
         with closing(self._conn()) as c, c:
             c.executescript(SCHEMA)
+            cols = {r["name"] for r in c.execute("PRAGMA table_info(workouts)")}
+            if "pad_kcal" not in cols:  # databases created before weight-based calories
+                c.execute("ALTER TABLE workouts ADD COLUMN pad_kcal INTEGER")
 
     def _conn(self):
         c = sqlite3.connect(self.path, timeout=10)
@@ -41,9 +75,9 @@ class WorkoutStore:
     def add(self, w: dict) -> int:
         with closing(self._conn()) as c, c:
             cur = c.execute(
-                "INSERT INTO workouts (start, end, duration_s, distance_m, kcal, max_incline_pct, avg_incline_pct)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (w["start"], w["end"], w["duration_s"], w["distance_m"], w["kcal"],
+                "INSERT INTO workouts (start, end, duration_s, distance_m, kcal, pad_kcal, max_incline_pct,"
+                " avg_incline_pct) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (w["start"], w["end"], w["duration_s"], w["distance_m"], w["kcal"], w.get("pad_kcal"),
                  w["max_incline_pct"], w["avg_incline_pct"]))
             return cur.lastrowid
 
@@ -79,6 +113,7 @@ def to_api(r: dict) -> dict:
         "distance_m": r["distance_m"],
         "distance_mi": round(r["distance_m"] / METERS_PER_MILE, 2),
         "kcal": r["kcal"],
+        "pad_kcal": r.get("pad_kcal"),
         "avg_mph": round((r["distance_m"] / METERS_PER_MILE) / (dur / 3600), 2) if dur else 0,
         "max_incline_pct": r["max_incline_pct"],
         "avg_incline_pct": r["avg_incline_pct"],
@@ -92,11 +127,17 @@ class WorkoutRecorder:
     A workout starts when the belt moves and ends when it has been stopped for
     `idle_end_s` (so a short stop and restart stays one workout). The pad resets its
     counters on each start, so resets are detected and added up.
+
+    Calories: with `weight_kg` set, they are worked out from your weight, the pad's distance and
+    the incline (see `walking_o2_ml_per_kg`). With `weight_kg=None` the pad's own number is used.
     """
 
     def __init__(self, store: WorkoutStore, min_seconds: int = 60, idle_end_s: int = 90,
-                 on_saved=None, clock=time.monotonic, wall=lambda: datetime.now().astimezone()):
+                 on_saved=None, clock=time.monotonic, wall=lambda: datetime.now().astimezone(),
+                 weight_kg: float | None = None):
         self.store = store
+        self.weight_kg = weight_kg  # may be changed while running (settings)
+        self._last_kcal: int | None = None
         self.min_seconds = min_seconds
         self.idle_end_s = idle_end_s
         self.on_saved = on_saved
@@ -109,11 +150,25 @@ class WorkoutRecorder:
     def active(self) -> bool:
         return self._s is not None
 
+    def live_kcal(self) -> int | None:
+        """Calories so far in this walk (or the last walk once it is saved), from your weight.
+
+        None when calories come from the pad, or before any walk has been seen.
+        """
+        with self._lock:
+            kg = self.weight_kg
+            if kg is None:
+                return None
+            if self._s is not None:
+                return round(o2_to_kcal(self._s["o2"], kg))
+            return self._last_kcal
+
     def feed(self, rec: dict):
         with self._lock:
             now, wall = self._clock(), self._wall()
             moving = rec.get("speed_kmh", 0) > 0
             el, dist, kcal = rec.get("elapsed_s", 0), rec.get("distance_m", 0), rec.get("kcal", 0)
+            inc = rec.get("incline_pct", 0.0)
             s = self._s
             if s is None:
                 if not moving:
@@ -122,15 +177,19 @@ class WorkoutRecorder:
                     "start": wall - timedelta(seconds=el), "last_moving": now, "last_moving_wall": wall,
                     "off": [0, 0, 0], "last": [el, dist, kcal], "last_t": now,
                     "max_incline": 0.0, "incline_sum": 0.0, "incline_time": 0.0,
+                    "o2": walking_o2_ml_per_kg(dist, inc),  # distance the pad counted before we saw it
                 }
             else:
                 last = s["last"]
                 if el + 5 < last[0]:  # pad counters reset (stopped, then started again)
                     s["off"] = [s["off"][i] + last[i] for i in range(3)]
+                    d_dist = dist
+                else:
+                    d_dist = max(dist - last[1], 0)
+                s["o2"] += walking_o2_ml_per_kg(d_dist, inc)
                 s["last"] = [el, dist, kcal]
             if moving:
                 dt = now - s["last_t"]
-                inc = rec.get("incline_pct", 0.0)
                 if 0 < dt < 10:
                     s["incline_sum"] += inc * dt
                     s["incline_time"] += dt
@@ -153,7 +212,8 @@ class WorkoutRecorder:
         if s is None:
             return None
         totals = [s["off"][i] + s["last"][i] for i in range(3)]
-        duration, distance, kcal = totals
+        duration, distance, pad_kcal = totals
+        kcal = pad_kcal if self.weight_kg is None else round(o2_to_kcal(s["o2"], self.weight_kg))
         if duration < self.min_seconds or distance <= 0:
             log.info("discarding short session (%ss, %sm)", duration, distance)
             return None
@@ -161,10 +221,13 @@ class WorkoutRecorder:
             "start": s["start"].isoformat(timespec="seconds"),
             "end": s["last_moving_wall"].isoformat(timespec="seconds"),
             "duration_s": int(duration), "distance_m": int(distance), "kcal": int(kcal),
+            "pad_kcal": int(pad_kcal),
             "max_incline_pct": s["max_incline"],
             "avg_incline_pct": round(s["incline_sum"] / s["incline_time"], 1) if s["incline_time"] else 0.0,
         }
         wid = self.store.add(w)
+        if self.weight_kg is not None:
+            self._last_kcal = w["kcal"]
         log.info("saved workout %s: %s", wid, w)
         if self.on_saved:
             self.on_saved(wid)

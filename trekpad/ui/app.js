@@ -244,9 +244,16 @@
   }
 
   // ---- settings sheet
+  function renderCalories() {
+    const src = settings.calorie_source || "weight";
+    $$("#kcal-seg button").forEach((b) => b.classList.toggle("sel", b.dataset.src === src));
+    $("#wt-val").textContent = settings.weight_lb ? String(settings.weight_lb) : "–";
+    $("#weight-row").classList.toggle("off", src !== "weight");
+  }
   async function loadSettings() {
     try { settings = await api("GET", "/api/settings"); } catch (_) { /* keep defaults */ }
     applyTheme();
+    renderCalories();
     $("#max-val").textContent = settings.max_speed_mph.toFixed(1);
     $("#version").textContent = `TrekPad Control ${settings.version || ""}`;
     const hk = $("#hotkeys");
@@ -260,6 +267,7 @@
   async function saveSetting(obj) {
     try { settings = await api("POST", "/api/settings", obj); } catch (e) { toast(e.message); }
     applyTheme();
+    renderCalories();
     $("#max-val").textContent = settings.max_speed_mph.toFixed(1);
     render();
   }
@@ -305,6 +313,10 @@
     const stepMax = (d) => saveSetting({ max_speed_mph: Math.round((settings.max_speed_mph + d) * 10) / 10 });
     $("#max-down").addEventListener("click", () => stepMax(-0.1));
     $("#max-up").addEventListener("click", () => stepMax(0.1));
+    $$("#kcal-seg button").forEach((b) => b.addEventListener("click", () => saveSetting({ calorie_source: b.dataset.src })));
+    const stepWt = (d) => saveSetting({ weight_lb: (settings.weight_lb || 187) + d, calorie_source: "weight" });
+    $("#wt-down").addEventListener("click", () => stepWt(-1));
+    $("#wt-up").addEventListener("click", () => stepWt(1));
     $("#copy-phone").addEventListener("click", () => copy(`${settings.lan_url}/#token=${token}`, "Phone link copied"));
     $("#copy-addr").addEventListener("click", () => copy(settings.lan_url, "Address copied"));
     $("#copy-token").addEventListener("click", () => copy(token, "Token copied"));
