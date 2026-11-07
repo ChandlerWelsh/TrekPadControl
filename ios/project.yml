@@ -1,0 +1,82 @@
+# XcodeGen spec. CI runs `xcodegen generate` (in ios/) to create TrekPad.xcodeproj;
+# the generated project, Info.plist and entitlements are not committed.
+name: TrekPad
+
+options:
+  bundleIdPrefix: com.welshmandesign
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    MARKETING_VERSION: "0.1"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.0"
+    TARGETED_DEVICE_FAMILY: "1"
+    CODE_SIGN_STYLE: Automatic
+
+targets:
+  TrekPad:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+    info:
+      path: Support/App-Info.plist
+      properties:
+        CFBundleDisplayName: TrekPad
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSRequiresIPhoneOS: true
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        ITSAppUsesNonExemptEncryption: false
+        UIBackgroundModes:
+          - bluetooth-central
+        NSBluetoothAlwaysUsageDescription: TrekPad connects to your walking pad over Bluetooth to show and change its speed and incline.
+        NSHealthShareUsageDescription: TrekPad reads nothing from Health; this permission is only requested together with saving walks.
+        NSHealthUpdateUsageDescription: TrekPad saves your walking pad walks to Apple Health as indoor walking workouts.
+    entitlements:
+      path: Support/TrekPad.entitlements
+      properties:
+        com.apple.developer.healthkit: true
+        com.apple.developer.healthkit.access: []
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.welshmandesign.trekpad
+        # XcodeGen's iOS preset sets "1,2" per target, overriding the project value.
+        TARGETED_DEVICE_FAMILY: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+
+  # Logic tests (protocol parsing, speed-jump handling, walk recording). Simulator only.
+  TrekPadTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests
+    dependencies:
+      - target: TrekPad
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.welshmandesign.trekpad.tests
+        GENERATE_INFOPLIST_FILE: YES
+        TARGETED_DEVICE_FAMILY: "1"
+        BUNDLE_LOADER: $(TEST_HOST)
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/TrekPad.app/TrekPad
+
+schemes:
+  TrekPad:
+    build:
+      targets:
+        TrekPad: all
+        TrekPadTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets: [TrekPadTests]
+    archive:
+      config: Release
