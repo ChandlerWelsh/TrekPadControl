@@ -36,6 +36,7 @@ class PadController:
         self.max_mph = max_mph
         self.on_address_found = on_address_found
         self.sample_listeners: list = []  # called on the pad thread with each full Treadmill Data record
+        self.ui_ask_close_at = 0.0  # set by the window when closed with the belt running; the page asks
 
         self._lock = threading.Lock()
         self._state = {
@@ -92,6 +93,7 @@ class PadController:
             raw = self._hold_mph
         s["speed_mph"] = round(raw, 2)
         s["max_speed_mph"] = self.max_mph
+        s["ask_close_at"] = self.ui_ask_close_at
         return s
 
     def submit(self, name: str, *args) -> concurrent.futures.Future:

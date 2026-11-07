@@ -16,14 +16,21 @@ No reverse engineering of the Merach app was needed. The pad speaks standard Blu
 > **Unofficial.** Not affiliated with Merach. Use at your own risk, and keep the pad's remote
 > within reach.
 
-## Requirements
+## Download (no Python needed)
 
-- Windows 10/11 with Bluetooth LE (most built-in Intel/Realtek adapters work)
-- Python 3.11+ ([python.org](https://www.python.org/downloads/), with the default *tcl/tk* option)
-- The Merach phone app must be **closed** (or phone Bluetooth off). The pad accepts one
-  connection at a time.
+1. Get **`TrekPad-windows.zip`** from the [latest release](https://github.com/ChandlerWelsh/TrekPadControl/releases/latest).
+2. Unzip it anywhere (for example `%LOCALAPPDATA%\Programs\TrekPad`) and run **`TrekPad.exe`**.
+   Pin it to Start or the taskbar if you like.
+3. The exe isn't code-signed, so Windows SmartScreen may warn the first time: choose
+   *More info → Run anyway*.
 
-## Install and run
+Needs Windows 10/11 with Bluetooth LE (most built-in Intel/Realtek adapters work) and the WebView2
+runtime (built into Windows 11). Close the Merach phone app first, or turn off the phone's
+Bluetooth: the pad accepts one connection at a time. Closing the window quits the app completely.
+
+## Run from source
+
+Needs Python 3.11+ ([python.org](https://www.python.org/downloads/)).
 
 ```powershell
 git clone https://github.com/ChandlerWelsh/TrekPadControl.git
@@ -159,6 +166,13 @@ pad, so don't forward the port to the internet. To change the token, delete `api
 
 ```powershell
 python -m unittest discover -s tests -t .
+```
+
+Build the exe (output in `dist\TrekPad\`). Add `-Install` to copy it to
+`%LOCALAPPDATA%\Programs\TrekPad` and add Start Menu and desktop shortcuts:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\build_exe.ps1 -Install
 ```
 
 - `trekpad/ftms.py`: protocol (parsing and commands, quirks documented at the top)

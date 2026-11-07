@@ -20,7 +20,7 @@
   let S = { connected: false, status: "Connecting…", speed_mph: 0, incline_pct: 0, running: false };
   let settings = { theme: "system", max_speed_mph: 4, speed_step_mph: 0.1, incline_step_pct: 1 };
   let speedPreview = null, inclinePreview = null, pending = { speed: null, incline: null };
-  let lastMsgAt = Date.now() / 1000, desk = null, failures = 0;
+  let lastMsgAt = Date.now() / 1000, lastAskClose = Date.now() / 1000, desk = null, failures = 0;
 
   // ---- API
   async function api(method, path, body) {
@@ -220,6 +220,10 @@
     $("#s-incline").textContent = S.connected ? String(inc) : "–";
     $("#s-time").textContent = S.connected ? fmtTime(S.elapsed_s || 0) : "–";
 
+    if (desk && S.ask_close_at && S.ask_close_at > lastAskClose) {  // closed from the taskbar / Alt+F4 while walking
+      lastAskClose = S.ask_close_at;
+      askClose();
+    }
     if (S.message && S.message_at > lastMsgAt) {
       lastMsgAt = S.message_at;
       toast(S.message);
@@ -325,7 +329,7 @@
       const dw = wantW - innerWidth, dh = wantH - innerHeight;
       if (Math.abs(dw) > 1 || Math.abs(dh) > 1) {
         fitTries += 1;
-        desk.grow(dw, dh);
+        desk.grow(dw, dh, devicePixelRatio);
         fitTimer = setTimeout(fit, 350);
       }
     }
@@ -333,8 +337,28 @@
     if (window.pywebview && window.pywebview.api) onDesk();
     window.addEventListener("pywebviewready", onDesk);
     $("#btn-min").addEventListener("click", () => desk && desk.minimize());
-    $("#btn-mini").addEventListener("click", () => { if (desk) { document.body.classList.add("mini"); desk.set_mini(true); refit(); } });
-    $("#btn-expand").addEventListener("click", () => { document.body.classList.remove("mini"); if (desk) { desk.set_mini(false); refit(); } });
+    $("#btn-mini").addEventListener("click", () => { if (desk) { document.body.classList.add("mini"); desk.set_mini(true, devicePixelRatio); refit(); } });
+    $("#btn-expand").addEventListener("click", () => { document.body.classList.remove("mini"); if (desk) { desk.set_mini(false, devicePixelRatio); refit(); } });
+
+    // Dragging the frameless window: the page tracks the pointer and asks Windows to move
+    // the window (pywebview's built-in drag goes through the deadlock-prone path).
+    $$(".drag").forEach((el) => {
+      let start = null, raf = 0, last = null;
+      el.addEventListener("pointerdown", (e) => {
+        if (!desk || e.button !== 0) return;
+        start = [e.screenX, e.screenY];
+        el.setPointerCapture(e.pointerId);
+        desk.drag_start();
+      });
+      el.addEventListener("pointermove", (e) => {
+        if (!start) return;
+        last = [e.screenX - start[0], e.screenY - start[1]];
+        if (!raf) raf = requestAnimationFrame(() => { raf = 0; desk.drag_to(last[0], last[1], devicePixelRatio); });
+      });
+      const end = () => { start = null; };
+      el.addEventListener("pointerup", end);
+      el.addEventListener("pointercancel", end);
+    });
     $("#btn-close").addEventListener("click", () => {
       if (!desk) return;
       if (S.connected && S.running) askClose(); else desk.close_app(false);
@@ -345,7 +369,7 @@
   function askClose() {
     if (document.body.classList.contains("mini")) {
       document.body.classList.remove("mini");
-      if (desk) { desk.set_mini(false); refit(); }
+      if (desk) { desk.set_mini(false, devicePixelRatio); refit(); }
     }
     $("#confirm").classList.remove("hidden");
   }

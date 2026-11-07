@@ -7,10 +7,10 @@ browser on the same Wi-Fi.
 from __future__ import annotations
 
 import logging
-import queue
 import socket
 import sys
 import threading
+import time
 import winreg
 from logging.handlers import RotatingFileHandler
 
@@ -20,9 +20,11 @@ from . import config
 from .api import ApiServer
 from .hotkeys import Hotkeys, pretty
 from .pad import PadController
+from .win32window import Win32Window
 from .workouts import WorkoutRecorder, WorkoutStore
 
 log = logging.getLogger("trekpad")
+WINDOW_TITLE = "TrekPad"
 
 FULL_SIZE = (400, 676)
 MINI_SIZE = (560, 52)
@@ -66,64 +68,72 @@ class DesktopBridge:
     """Functions the page can call as window.pywebview.api.* (window controls only).
     Attributes starting with _ are not exposed to the page.
 
-    Window operations run one at a time on a worker thread and the page's call returns at
-    once: changing on_top and then resizing from inside a page call deadlocks the window
-    (found when leaving the desk strip froze the app)."""
+    Every window operation goes through Win32Window (asynchronous Win32 calls), never
+    through pywebview's window methods, which can deadlock (see win32window.py).
+    The page passes CSS pixels plus its devicePixelRatio; sizes here are physical pixels."""
 
     def __init__(self, pad):
         self._pad = pad
-        self._window = None
+        self._win = Win32Window(WINDOW_TITLE)
         self._mini = False
-        # Sizes in resize() units, which differ slightly from creation units at high DPI;
-        # the page measures itself afterwards and nudges them with grow().
-        self._sizes = {False: FULL_SIZE, True: MINI_SIZE}
+        self._full_size = None   # physical size of the full window, remembered while in the strip
+        self._mini_size = None
+        self._drag_origin = None
         self._confirmed = False
         self._stop_on_exit = False
-        self._ops: queue.Queue = queue.Queue()
-        threading.Thread(target=self._worker, name="window-ops", daemon=True).start()
-
-    def _worker(self):
-        while True:
-            op = self._ops.get()
-            try:
-                op()
-            except Exception:
-                log.exception("window operation failed")
 
     def minimize(self):
-        self._ops.put(self._window.minimize)
+        self._win.minimize()
 
-    def set_mini(self, on):
-        on = bool(on)
-        self._mini = on
-
-        def op():
-            self._window.resize(*self._sizes[on])  # resize first, then on_top (the other order hangs)
-            self._window.on_top = on
-        self._ops.put(op)
-
-    def grow(self, dw, dh):
-        """The page measured itself and needs the current window this much bigger."""
-        dw, dh = int(dw), int(dh)
-        if not (dw or dh) or abs(dw) > 200 or abs(dh) > 200:
+    def set_mini(self, on, dpr=1.0):
+        on, dpr = bool(on), float(dpr) or 1.0
+        rect = self._win.rect()
+        if rect is None or on == self._mini:
             return
-        mode = self._mini
-        w, h = self._sizes[mode]
-        self._sizes[mode] = (max(200, w + dw), max(30, h + dh))
-        self._ops.put(lambda: self._window.resize(*self._sizes[mode]))
+        if on:
+            self._full_size = rect[2:]
+            w, h = self._mini_size or (round(MINI_SIZE[0] * dpr), round(MINI_SIZE[1] * dpr))
+        else:
+            self._mini_size = rect[2:]
+            w, h = self._full_size or (round(FULL_SIZE[0] * dpr), round(FULL_SIZE[1] * dpr))
+        self._mini = on
+        self._win.set_size(w, h, topmost=on)
+
+    def grow(self, dw, dh, dpr=1.0):
+        """The page measured itself and needs the window this many CSS px bigger."""
+        dpr = float(dpr) or 1.0
+        dw, dh = round(float(dw) * dpr), round(float(dh) * dpr)
+        rect = self._win.rect()
+        if rect is None or not (dw or dh) or abs(dw) > 400 or abs(dh) > 400:
+            return
+        self._win.set_size(max(200, rect[2] + dw), max(30, rect[3] + dh))
+
+    def drag_start(self):
+        rect = self._win.rect()
+        self._drag_origin = rect[:2] if rect else None
+
+    def drag_to(self, dx, dy, dpr=1.0):
+        """Move the window by (dx, dy) CSS px from where the drag started."""
+        if self._drag_origin is None:
+            return
+        dpr = float(dpr) or 1.0
+        self._win.move_to(self._drag_origin[0] + round(float(dx) * dpr),
+                          self._drag_origin[1] + round(float(dy) * dpr))
 
     def close_app(self, stop_belt=False):
         self._stop_on_exit = bool(stop_belt)
         self._confirmed = True
-        self._ops.put(self._window.destroy)
+        # Close a moment later so this call's reply reaches the page before the WebView goes away.
+        threading.Timer(0.2, self._win.close).start()
 
     def _on_closing(self):
-        """Alt+F4 / taskbar close: ask first if the belt is moving."""
+        """Alt+F4 / taskbar close: ask first if the belt is moving. The page picks the
+        request up from /api/status (no calls into the window from here)."""
         if self._confirmed:
             return True
         s = self._pad.snapshot()
         if s["connected"] and s["running"]:
-            self._window.evaluate_js("window.tp && window.tp.askClose()")
+            self._pad.ui_ask_close_at = time.time()
             return False
         return True
 
@@ -177,11 +187,10 @@ def main():
     dark = theme == "dark" or (theme == "system" and windows_prefers_dark())
     bridge = DesktopBridge(pad)
     window = webview.create_window(
-        "TrekPad", url=f"http://127.0.0.1:{port}/#token={cfg['api_token']}",
+        WINDOW_TITLE, url=f"http://127.0.0.1:{port}/#token={cfg['api_token']}",
         width=FULL_SIZE[0], height=FULL_SIZE[1], min_size=(200, 30),  # default min height (100) is taller than the strip
         resizable=False, frameless=True, easy_drag=False,
         background_color="#121417" if dark else "#F3F4F6", js_api=bridge)
-    bridge._window = window
     window.events.closing += bridge._on_closing
     webview.start(private_mode=False, storage_path=str(config.APP_DIR / "webview"))
 
