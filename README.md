@@ -100,14 +100,19 @@ game mode never starts it.
 | **Climb** | The incline rises 1% every 5 minutes in game, from 0% up to a max (default 4%). |
 | **Both** (default) | Pace and Climb together. |
 
-How it knows what you're doing (no game data needed):
+How it knows what you're doing:
 
+- **Deadlock's own log (recommended).** With the `-condebug` launch option, Deadlock writes its
+  console to a log file, and TrekPad reads your **deaths, respawns, and when a match starts and ends**
+  from it, live. See [Deadlock setup](#deadlock-setup). Game mode then does nothing until a real match
+  starts, and *Settings → Game mode* shows "deaths from Deadlock".
 - **Which app is in front.** It only works while a game from the list is in front (`deadlock.exe`
   by default). *Settings → Games* has an *Add* button for the last app you used, so switch to the
   game, back to TrekPad, and add it. A quick alt-tab (under 5 s) doesn't count as leaving.
 - **Mouse and keyboard activity.** No input for 8 seconds counts as idle: usually dead, shopping or
   waiting. Windows only reports the time of the last input. No keys are read or recorded.
-  Controller input doesn't count.
+  Controller input doesn't count. Without Deadlock's log (or for other games), this is the only
+  way it guesses you're dead.
 
 What it does to stay safe:
 
@@ -121,6 +126,11 @@ What it does to stay safe:
 - If you change the **speed** yourself (app, shortcut or remote), it steps back for a minute. If you
   change the **incline**, the climb carries on from your incline.
 - Leaving the game eases back to the easy pace. After 2 minutes away, the climb starts over.
+- With Deadlock's log: nothing happens in the hideout, menus, hero select or the match intro. When
+  the match ends it eases back to the easy pace (if it had sped you up), then leaves the belt alone
+  until the next match.
+- ⚠️ Idle still counts as hard pace inside a match. If you step away with the game in front, the
+  belt can speed up with nobody on it: stop the belt or press `Ctrl+Alt+G` first.
 
 The stop shortcut (`Ctrl+Alt+End`) and the remote work as always.
 
@@ -137,21 +147,30 @@ curl.exe -X POST -H "X-Token: <token>" "http://localhost:8765/api/game/event?eve
 ```
 
 Events: `death` (hard pace until `respawn`, or 90 s), `respawn`, `match_start` and `match_end`
-(both restart the climb). This is where Game State Integration or an Overwolf bridge would plug in.
+(both restart the climb). The Deadlock log reader uses these same events.
 
-### Does Deadlock support Game State Integration?
+### Deadlock setup
 
-Valve hasn't documented it for Deadlock. To test it on your PC (needs Python):
+1. Steam → right-click **Deadlock** → **Properties** → **General** → **Launch Options**: add `-condebug`.
+2. Restart Deadlock. It now writes `game\citadel\console.log` (a new one each launch).
+3. TrekPad finds it by itself through your Steam libraries. Nothing else to set up.
+
+It only reads a text file the game writes on purpose with an official launch option; nothing touches
+the game. If a Deadlock update changes the log, game mode falls back to idle detection.
+
+**Match card:** while game mode is on, the main window shows a Deadlock match card with the match
+time, deaths, total time dead, and **Alive** / **Dead · 12 s**. After a match it shows the last
+match for 10 minutes.
+
+To watch detection live (beeps on each death and respawn):
 
 ```powershell
-python research\gsi_test.py
+python research\deadlock_log_watch.py
 ```
 
-The script finds Deadlock, writes a GSI config into `game\citadel\cfg\gamestate_integration`, and
-listens for data. Add the `-gamestateintegration` launch option in Steam, start Deadlock (restart it
-if it's open), play a few minutes, then press Ctrl+C. It reports whether anything arrived and which
-fields, saves the data to `gsi_capture.jsonl`, and removes the config. If Deadlock isn't found, pass
-`--game-dir "<path to steamapps\common\Deadlock>"`.
+**Not supported:** Deadlock doesn't send Game State Integration data (tested twice, including with
+`-gamestateintegration`; `research\gsi_test.py` is the test). Overwolf has Deadlock events but needs
+a published Overwolf app.
 
 ## Calories
 
@@ -271,7 +290,10 @@ powershell -ExecutionPolicy Bypass -File tools\build_exe.ps1 -Install
   pywebview (Edge WebView2) window
 - `trekpad/api.py`, `trekpad/hotkeys.py`, `trekpad/main.py`
 - `research/`: the scan, GATT-dump and live-test scripts used to work out the protocol, and
-  `gsi_test.py` for checking Deadlock's Game State Integration
+  `gsi_test.py` for checking Deadlock's Game State Integration (it doesn't send any), and
+  `deadlock_log_watch.py` for watching death/respawn detection live
+- `trekpad/deadlock_log.py`: reads Deadlock's console log (deaths, respawns, matches, match stats)
+- `trekpad/gamemode.py`: game mode (one source per game: `GAME_EXES`; Deadlock today)
 
 ## License
 

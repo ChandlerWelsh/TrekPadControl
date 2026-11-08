@@ -90,9 +90,41 @@ The pad's counters reset when the belt is started again.
 `02 01` stopped, and `03` (the spec calls it "stopped by safety key") also arrives while idle
 just after connecting.
 
+## Deadlock game events (for game mode)
+
+Tested November 2026 on a real online match, the hideout and the post-match screen.
+
+| Source | Result |
+|---|---|
+| Game State Integration | **Nothing arrives**, tested twice for 5–12 minutes of play, the second time with `-gamestateintegration` set. Deadlock doesn't send GSI. |
+| Overwolf Game Events | Deadlock is supported (death, kill, assist, match start/end, phase; **no respawn**), but loading your own app needs Overwolf developer approval for a published app. |
+| **Console log (`-condebug`)** | **Works.** Written live (1–2 s) to `game\citadel\console.log`, recreated at each launch. |
+
+Lines that matter (your slot is learned from the `Added prediction` line that carries your name):
+
+```
+OnGameStateChanged: WaitingForPlayersToJoin (2)
+OnGameStateChanged: MatchIntro (4)
+OnGameStateChanged: WaitForMapToLoad (5)
+OnGameStateChanged: GameInProgress (7)                       <- match on (only after the intro)
+[Prediction] Added prediction for player slot 5 (Name)       <- you (re)spawned; slot 5 = you
+[Prediction] Shutdown prediction for player slot 5.  3 ...   <- you died (death cam)
+OnGameStateChanged: PostGame (8)                             <- match over
+OnGameStateChanged: End (11) / [Client] Disconnecting from server: ...
+```
+
+- The **hideout** and the **screen after a match** go `HeroSelection → GameInProgress` with no intro,
+  so only a `GameInProgress` that follows the intro is a match.
+- Other players' deaths use other slots; `Cannot apply Ragdoll impulse` lines are any kill (not
+  attributable to you).
+- One full match: 5 deaths, 5 respawns (17–26 s dead) and the match end, all detected at the right
+  moment; timestamps (`MM/DD HH:MM:SS`, no year) give match time and time dead.
+
 ## Scripts
 
 - `scan.py`: passive scan, flags FTMS devices
 - `gatt_dump.py`: read-only service and characteristic dump
 - `live_test.py`: start → 1.0 mph → incline 1 % (wait, correct) → 0 % → stop, with a speed limit
   that stops the belt. **Stay off the belt and keep the remote in hand.**
+- `gsi_test.py`: checks whether Deadlock sends Game State Integration data (it doesn't)
+- `deadlock_log_watch.py`: live death/respawn detection from Deadlock's console log, with beeps
