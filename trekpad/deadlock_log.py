@@ -29,6 +29,9 @@ RE_STATE = re.compile(r"OnGameStateChanged: (\w+)")
 RE_DISCONNECT = re.compile(r"\[Client\] Disconnecting from server")
 IN_PROGRESS = "GameInProgress"
 OVER_STATES = {"PostGame", "GameOver", "Disconnect"}
+# A real match goes WaitingForPlayersToJoin -> MatchIntro -> WaitForMapToLoad -> GameInProgress.
+# The hideout and the post-match screen jump straight to GameInProgress, so they aren't matches.
+INTRO_STATES = {"WaitingForPlayersToJoin", "MatchIntro", "WaitForMapToLoad"}
 
 
 class DeadlockLogParser:
@@ -39,20 +42,26 @@ class DeadlockLogParser:
         self.player: str | None = None
         self.in_match = False
         self.dead = False
+        self.intro_seen = False   # saw the match intro since the last match/disconnect
 
     def feed(self, line: str) -> list[str]:
         events: list[str] = []
         m = RE_STATE.search(line)
         if m:
             state = m.group(1)
-            if state == IN_PROGRESS and not self.in_match:
-                self.in_match, self.dead = True, False
+            if state in INTRO_STATES:
+                self.intro_seen = True
+            elif state == IN_PROGRESS and not self.in_match and self.intro_seen:
+                self.in_match, self.dead, self.intro_seen = True, False, False
                 events.append("match_start")
             elif self.in_match and (state in OVER_STATES or state.startswith("Post")):
                 events += self._end()
             return events
         if RE_DISCONNECT.search(line):
-            return self._end() if self.in_match else []
+            if self.in_match:
+                return self._end()
+            self.intro_seen = False
+            return []
         m = RE_ADDED.search(line)
         if m:
             self.slot, self.player = m.group(1), m.group(2)
@@ -67,7 +76,7 @@ class DeadlockLogParser:
         return events
 
     def _end(self) -> list[str]:
-        self.in_match, self.dead = False, False
+        self.in_match, self.dead, self.intro_seen = False, False, False
         return ["match_end"]
 
 

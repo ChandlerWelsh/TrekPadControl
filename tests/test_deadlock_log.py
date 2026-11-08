@@ -33,12 +33,26 @@ def run(text):
 class Parser(unittest.TestCase):
     def test_real_match(self):
         p, events = run(HIDEOUT_AND_MATCH)
-        # hideout counts as a short match, then the real match with two deaths
-        self.assertEqual(events, ["match_start", "match_end", "match_start", "death", "respawn", "death", "respawn"])
+        # the hideout isn't a match; the real match (after its intro) has two deaths
+        self.assertEqual(events, ["match_start", "death", "respawn", "death", "respawn"])
         self.assertEqual((p.slot, p.player, p.in_match, p.dead), ("5", "Player", True, False))
 
+    def test_credits_screen_after_the_match_is_not_a_new_match(self):
+        _, events = run(HIDEOUT_AND_MATCH + """\
+11/07 21:42:45 OnGameStateChanged: PostGame (8)
+11/07 21:42:55 OnGameStateChanged: End (11)
+11/07 21:42:55 [Client] Disconnecting from server: NETWORK_DISCONNECT_DISCONNECT_BY_USER
+11/07 21:42:56 [Client] Disconnecting from server: NETWORK_DISCONNECT_LOOPDEACTIVATE
+11/07 21:43:02 OnGameStateChanged: HeroSelection (3)
+11/07 21:43:02 [Prediction] Added prediction for player slot 0 (Player)
+11/07 21:43:02 OnGameStateChanged: GameInProgress (7)
+11/07 21:43:30 [Prediction] Shutdown prediction for player slot 0.  3 predictable entities
+""")
+        self.assertEqual(events[-1], "match_end")
+        self.assertEqual(events.count("match_start"), 1)
+
     def test_other_players_slot_is_not_your_death(self):
-        _, events = run(HIDEOUT_AND_MATCH.splitlines()[0] + "\n"
+        _, events = run("x OnGameStateChanged: MatchIntro (4)\nx OnGameStateChanged: GameInProgress (7)\n"
                         "x [Prediction] Added prediction for player slot 5 (Player)\n"
                         "x [Prediction] Shutdown prediction for player slot 3.  1 predictable entities\n")
         self.assertEqual(events, ["match_start"])
@@ -62,6 +76,12 @@ class Parser(unittest.TestCase):
         _, events = run(HIDEOUT_AND_MATCH + "x [Prediction] Shutdown prediction for player slot 5.  3\n"
                         "x [Prediction] Shutdown prediction for player slot 5.  3\n")
         self.assertEqual(events.count("death"), 3)  # two in the match text + one here
+
+    def test_hideout_deaths_are_ignored(self):
+        _, events = run("x OnGameStateChanged: GameInProgress (7)\n"
+                        "x [Prediction] Added prediction for player slot 0 (Player)\n"
+                        "x [Prediction] Shutdown prediction for player slot 0.  3 predictable\n")
+        self.assertEqual(events, [])
 
 
 class Watcher(unittest.TestCase):
@@ -92,7 +112,8 @@ class Watcher(unittest.TestCase):
                 # Deadlock relaunches: a new, shorter file
                 path.unlink()
                 time.sleep(0.05)
-                path.write_text("x OnGameStateChanged: GameInProgress (7)\n", encoding="utf-8")
+                path.write_text("x OnGameStateChanged: MatchIntro (4)\nx OnGameStateChanged: GameInProgress (7)\n",
+                                encoding="utf-8")
                 self.wait_for(got, 3)
                 self.assertEqual(got[-1], "match_start")
             finally:
