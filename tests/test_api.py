@@ -7,14 +7,18 @@ from pathlib import Path
 from unittest import mock
 
 from trekpad.api import ApiServer
+from trekpad.gamemode import GameMode
 from trekpad.workouts import KG_PER_LB, WorkoutRecorder, WorkoutStore
 
 
 class FakePad:
     max_mph = 4.0
 
+    def _msg(self, text):
+        pass
+
     def snapshot(self):
-        return {"connected": True, "running": True, "kcal": 12}
+        return {"connected": True, "running": True, "speed_mph": 2.0, "kcal": 12}
 
 
 class ApiCalorieTests(unittest.TestCase):
@@ -26,7 +30,12 @@ class ApiCalorieTests(unittest.TestCase):
         patcher = mock.patch("trekpad.api.config.save")
         self.saved = patcher.start()
         self.addCleanup(patcher.stop)
-        self.api = ApiServer(FakePad(), self.recorder.store, self.recorder, self.cfg, host="127.0.0.1")
+        self.game_cfg = {"enabled": False, "profile": "both", "games": ["deadlock.exe"], "easy_mph": 2.0,
+                         "hard_mph": 2.8, "start_incline_pct": 0, "max_incline_pct": 4, "climb_every_min": 5,
+                         "idle_seconds": 8, "sounds": False}
+        pad = FakePad()
+        self.game = GameMode(pad, self.game_cfg, lambda: {"exe": "deadlock.exe", "idle_s": 0})
+        self.api = ApiServer(pad, self.recorder.store, self.recorder, self.cfg, host="127.0.0.1", game=self.game)
         self.api.start()
         self.base = f"http://127.0.0.1:{self.api.httpd.server_address[1]}"
 
@@ -68,6 +77,22 @@ class ApiCalorieTests(unittest.TestCase):
         self.call("POST", "/api/settings", {"calorie_source": "pad"})
         _, s = self.call("GET", "/api/status")
         self.assertEqual(s["kcal"], 12)
+
+    def test_game_mode_endpoints(self):
+        _, st = self.call("GET", "/api/status")
+        self.assertEqual(st["game"]["state"], "off")
+        code, g = self.call("POST", "/api/game", {"enabled": True, "hard_mph": 3.0, "add_game": "other.exe"})
+        self.assertEqual(code, 200)
+        self.assertTrue(g["enabled"])
+        self.assertEqual(g["settings"]["hard_mph"], 3.0)
+        self.assertEqual(g["settings"]["games"], ["deadlock.exe", "other.exe"])
+        self.assertTrue(self.game_cfg["enabled"])
+        self.assertEqual(self.call("POST", "/api/game", {"profile": "nope"})[0], 400)
+        self.assertEqual(self.call("POST", "/api/game/event", {"event": "death"})[0], 200)
+        self.assertEqual(self.call("POST", "/api/game/event", {"event": "nope"})[0], 400)
+        self.game.tick()
+        _, st = self.call("GET", "/api/status")
+        self.assertEqual(st["game"]["state"], "dead")
 
 
 if __name__ == "__main__":

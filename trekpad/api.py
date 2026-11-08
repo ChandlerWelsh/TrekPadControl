@@ -34,8 +34,9 @@ MIN_WEIGHT_LB, MAX_WEIGHT_LB = 50, 600
 
 
 class ApiServer:
-    def __init__(self, pad, store, recorder, cfg: dict, info: dict | None = None, host: str = "0.0.0.0"):
-        self.pad, self.store, self.recorder, self.cfg = pad, store, recorder, cfg
+    def __init__(self, pad, store, recorder, cfg: dict, info: dict | None = None, host: str = "0.0.0.0",
+                 game=None):
+        self.pad, self.store, self.recorder, self.cfg, self.game = pad, store, recorder, cfg, game
         self.info = info or {}
         self.httpd = ThreadingHTTPServer((host, int(cfg["api_port"])), self._handler_class())
         self.httpd.daemon_threads = True
@@ -125,6 +126,8 @@ class ApiServer:
                     est = api.recorder.live_kcal()
                     if est is not None:
                         s["kcal"] = est
+                    if api.game is not None:
+                        s["game"] = api.game.status()
                     return self._json(200, s)
                 if path == "/api/settings":
                     if method == "POST":
@@ -148,6 +151,13 @@ class ApiServer:
                         api.recorder.weight_kg = weight_kg_from_config(cfg)
                         config.save(cfg)
                     return self._json(200, api.settings())
+                if path == "/api/game" and api.game is not None:
+                    if method == "POST":
+                        api.game.apply_settings(p)
+                    return self._json(200, api.game.status())
+                if method == "POST" and path == "/api/game/event" and api.game is not None:
+                    api.game.event(str(p.get("event", "")))
+                    return self._json(200, api.game.status())
                 if method == "GET" and path == "/api/workouts":
                     unsynced = str(p.get("unsynced", "")).lower() in ("1", "true", "yes")
                     items = api.store.list(unsynced_only=unsynced)

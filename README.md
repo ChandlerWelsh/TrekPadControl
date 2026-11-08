@@ -7,6 +7,7 @@ name `MRK-T25-xxxx`) from a PC instead of the phone app. It can:
   local HTTP API
 - **Show live stats**: speed, incline, time, distance and calories
 - **Record each walk** and **sync it to Apple Health** through an iPhone Shortcut
+- **Game mode**: speed and incline follow what you're doing in a game such as Deadlock
 - **Fix a firmware bug** where changing incline also raises the speed (see [Safety](#safety))
 
 No reverse engineering of the Merach app was needed. The pad speaks standard Bluetooth FTMS
@@ -55,8 +56,8 @@ The first time it runs, Windows may ask whether Python can use the network. Allo
 - **− / +** buttons fine-tune by 0.1 mph or 1%.
 - **Desk strip:** the icon next to minimize shrinks the app to a slim bar that stays on top of your
   other windows. The arrows icon on the strip expands it again.
-- **Settings** (gear icon): theme (system, light or dark), max speed, the phone link, and the
-  Apple Health address and token.
+- **Settings** (gear icon): theme (system, light or dark), max speed, game mode, calories, the phone
+  link, and the Apple Health address and token.
 - **Phone remote:** *Settings → Copy phone link*, then open it on your phone (same Wi-Fi). The same
   interface runs in the phone's browser.
 
@@ -66,6 +67,7 @@ The first time it runs, Windows may ask whether Python can use the network. Allo
 | **Stop** | **Stop**, `Space` or `Esc` | `Ctrl+Alt+End` |
 | Speed | click the gauge, − / +, `↑` / `↓` | `Ctrl+Alt+PgUp` / `PgDn` (±0.1) |
 | Incline | click a bar, − / +, `→` / `←` | `Ctrl+Alt+Shift+PgUp` / `PgDn` (±1) |
+| Game mode on/off | the **Game** button next to the gear | `Ctrl+Alt+G` |
 
 Shortcuts, steps, presets, the max speed and your weight can be changed in `%APPDATA%\TrekPadControl\config.json`
 (restart the app afterwards). I avoided `Ctrl+Alt+arrows` because some Intel graphics drivers use
@@ -85,6 +87,71 @@ Speed and incline commands only work while the belt is running. Press Start firs
 - **Closing the app** while the belt is moving asks whether to stop the belt first.
 - **If the app crashes or Bluetooth drops,** the pad keeps going at its current speed, so use the
   remote. The app reconnects automatically.
+
+## Game mode
+
+Speed and incline adjust by themselves while you play. Turn it on with the **Game** button (next to
+the gear) or `Ctrl+Alt+G`, and set it up in *Settings → Game mode*. Start the belt yourself first:
+game mode never starts it.
+
+| Profile | What it does |
+|---|---|
+| **Pace** | Easy pace (default 2.0 mph) while you're playing, hard pace (2.8 mph) while you're idle or dead. Aiming suffers at speed, so the hard part lands when you aren't aiming. |
+| **Climb** | The incline rises 1% every 5 minutes in game, from 0% up to a max (default 4%). |
+| **Both** (default) | Pace and Climb together. |
+
+How it knows what you're doing (no game data needed):
+
+- **Which app is in front.** It only works while a game from the list is in front (`deadlock.exe`
+  by default). *Settings → Games* has an *Add* button for the last app you used, so switch to the
+  game, back to TrekPad, and add it. A quick alt-tab (under 5 s) doesn't count as leaving.
+- **Mouse and keyboard activity.** No input for 8 seconds counts as idle: usually dead, shopping or
+  waiting. Windows only reports the time of the last input. No keys are read or recorded.
+  Controller input doesn't count.
+
+What it does to stay safe:
+
+- Changes speed 0.1 mph at a time: every 2 s going up, every 1 s coming down. Easy to hard takes
+  about 16 seconds.
+- **Beeps**, then waits 3 seconds, before speeding up or changing the incline.
+- Changes the incline only at a moment you aren't aiming (idle, dead, or out of the game), or
+  after a minute of waiting. Every incline change makes this pad's speed jump briefly (see
+  [Safety](#safety)), so you don't want one mid-fight.
+- Never goes above your max speed, and does nothing while the belt is stopped.
+- If you change the **speed** yourself (app, shortcut or remote), it steps back for a minute. If you
+  change the **incline**, the climb carries on from your incline.
+- Leaving the game eases back to the easy pace. After 2 minutes away, the climb starts over.
+
+The stop shortcut (`Ctrl+Alt+End`) and the remote work as always.
+
+More settings in `config.json` under `game_mode`: `games`, `easy_mph`, `hard_mph`,
+`start_incline_pct`, `max_incline_pct`, `climb_every_min`, `idle_seconds` and `sounds`.
+
+### Game events (optional)
+
+Anything on your PC can tell game mode what's happening in the game, which beats guessing from
+idle time:
+
+```powershell
+curl.exe -X POST -H "X-Token: <token>" "http://localhost:8765/api/game/event?event=death"
+```
+
+Events: `death` (hard pace until `respawn`, or 90 s), `respawn`, `match_start` and `match_end`
+(both restart the climb). This is where Game State Integration or an Overwolf bridge would plug in.
+
+### Does Deadlock support Game State Integration?
+
+Valve hasn't documented it for Deadlock. To test it on your PC (needs Python):
+
+```powershell
+python research\gsi_test.py
+```
+
+The script finds Deadlock, writes a GSI config into `game\citadel\cfg\gamestate_integration`, and
+listens for data. Add the `-gamestateintegration` launch option in Steam, start Deadlock (restart it
+if it's open), play a few minutes, then press Ctrl+C. It reports whether anything arrived and which
+fields, saves the data to `gsi_capture.jsonl`, and removes the config. If Deadlock isn't found, pass
+`--game-dir "<path to steamapps\common\Deadlock>"`.
 
 ## Calories
 
@@ -172,6 +239,8 @@ header `X-Token: <token>` or as `?token=<token>`. Control commands are `POST`.
 | POST | `/api/incline/up`, `/api/incline/down` | optional `?step=2` |
 | GET | `/api/workouts` | `?unsynced=1` for only walks not yet in Health |
 | POST | `/api/workouts/<id>/synced` | mark as logged |
+| GET/POST | `/api/game` | game mode status; POST `enabled`, `profile`, `easy_mph`, `hard_mph`, `max_incline_pct`, `add_game`, `remove_game`… |
+| POST | `/api/game/event?event=death` | `death`, `respawn`, `match_start`, `match_end` |
 
 ```powershell
 curl.exe -X POST -H "X-Token: <token>" "http://localhost:8765/api/speed?mph=2.0"
@@ -196,11 +265,13 @@ powershell -ExecutionPolicy Bypass -File tools\build_exe.ps1 -Install
 
 - `trekpad/ftms.py`: protocol (parsing and commands, quirks documented at the top)
 - `trekpad/pad.py`: Bluetooth connection, commands, incline-bug workaround, speed watchdog
-- `trekpad/workouts.py`: walk recording and storage
+- `trekpad/workouts.py`: walk recording, storage and calorie calculation
+- `trekpad/gamemode.py`: game mode (signals, profiles, ramping and safety rules)
 - `trekpad/ui/`: the interface (HTML/CSS/JS), served by the local server and shown in a frameless
   pywebview (Edge WebView2) window
 - `trekpad/api.py`, `trekpad/hotkeys.py`, `trekpad/main.py`
-- `research/`: the scan, GATT-dump and live-test scripts used to work out the protocol
+- `research/`: the scan, GATT-dump and live-test scripts used to work out the protocol, and
+  `gsi_test.py` for checking Deadlock's Game State Integration
 
 ## License
 

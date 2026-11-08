@@ -18,6 +18,7 @@ import webview
 
 from . import config
 from .api import ApiServer
+from .gamemode import GameMode, WindowsSignals, windows_beep
 from .hotkeys import Hotkeys, pretty
 from .pad import PadController
 from .win32window import Win32Window
@@ -153,6 +154,7 @@ def main():
 
     pad = PadController(cfg.get("address") or None, cfg["max_speed_mph"], on_address_found=remember_address)
     pad.sample_listeners.append(recorder.feed)
+    game = GameMode(pad, cfg["game_mode"], WindowsSignals(), beep=windows_beep, save=lambda: config.save(cfg))
 
     hk = cfg["hotkeys"]
     actions = {
@@ -162,12 +164,13 @@ def main():
         "incline_down": ("Incline −", lambda: pad.submit("change_incline", -cfg["incline_step_pct"])),
         "start": ("Start", lambda: pad.submit("start")),
         "stop": ("Stop", lambda: pad.submit("stop")),
+        "game_mode": ("Game mode on/off", game.toggle),
     }
     port = int(cfg["api_port"])
     info = {"lan_url": f"http://{lan_ip()}:{port}",
             "hotkeys": [[pretty(hk[n]), label] for n, (label, _) in actions.items() if hk.get(n)]}
     try:
-        api = ApiServer(pad, store, recorder, cfg, info)
+        api = ApiServer(pad, store, recorder, cfg, info, game=game)
     except OSError:
         log.error("port %s busy", port)
         webview.create_window("TrekPad", html=f"<body style='font:14px Segoe UI;padding:20px'>"
@@ -178,6 +181,7 @@ def main():
 
     pad.start_background()
     api.start()
+    game.start()
 
     hotkeys = Hotkeys([(hk[name], fn) for name, (_, fn) in actions.items() if hk.get(name)])
     hotkeys.start()
@@ -196,6 +200,7 @@ def main():
     webview.start(private_mode=False, storage_path=str(config.APP_DIR / "webview"))
 
     log.info("closing")
+    game.stop()
     recorder.finish()
     pad.shutdown(stop_belt=bridge._stop_on_exit)
     api.stop()

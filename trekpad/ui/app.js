@@ -215,6 +215,8 @@
     $("#health").textContent = n ? `${n} walk${n === 1 ? "" : "s"} waiting for Health` : "Apple Health up to date";
     $("#rec").classList.toggle("hidden", !S.recording_workout);
 
+    renderGame();
+
     // strip
     $("#s-speed").textContent = S.connected ? speed.toFixed(1) : "–";
     $("#s-incline").textContent = S.connected ? String(inc) : "–";
@@ -228,6 +230,64 @@
       lastMsgAt = S.message_at;
       toast(S.message);
     }
+  }
+
+  // ---- game mode
+  let gamesShown = "";
+  function renderGame() {
+    const g = S.game;
+    $("#btn-game").classList.toggle("hidden", !g);
+    $("#s-game").classList.toggle("hidden", !g || !g.enabled);
+    if (!g) return;
+    const st = g.settings || {};
+    const short = g.enabled ? g.short : "";
+    const chip = $("#btn-game");
+    chip.classList.toggle("on", g.enabled);
+    chip.classList.toggle("paused", g.state === "paused");
+    chip.setAttribute("aria-pressed", String(g.enabled));
+    chip.title = `Game mode: ${g.label}${g.state === "paused" ? ` (${g.paused_s} s)` : ""}. Ctrl+Alt+G`;
+    $("#game-text").textContent = short ? `Game · ${short}` : "Game";
+    const badge = $("#s-game");
+    badge.classList.toggle("hard", short === "hard");
+    badge.classList.toggle("paused", g.state === "paused");
+    $("#s-game-text").textContent = short || "game";
+
+    // settings sheet
+    $$("#gm-on button").forEach((b) => b.classList.toggle("sel", (b.dataset.on === "1") === g.enabled));
+    $$("#gm-profile button").forEach((b) => b.classList.toggle("sel", b.dataset.profile === st.profile));
+    let line = g.enabled ? g.label : "Off";
+    if (g.enabled && g.state === "paused") line += ` (${g.paused_s} s)`;
+    if (g.enabled && g.target_mph) line += ` · target ${g.target_mph.toFixed(1)} mph`;
+    if (g.enabled && g.target_incline_pct !== null && g.target_incline_pct !== undefined) line += ` · ${g.target_incline_pct}%`;
+    $("#gm-state").textContent = `Now: ${line}`;
+    $("#gm-easy").textContent = st.easy_mph !== undefined ? st.easy_mph.toFixed(1) : "–";
+    $("#gm-hard").textContent = st.hard_mph !== undefined ? st.hard_mph.toFixed(1) : "–";
+    $("#gm-maxinc").textContent = st.max_incline_pct !== undefined ? String(st.max_incline_pct) : "–";
+    $("#gm-climb-note").textContent = `Climbs 1% every ${st.climb_every_min} min in game, from ${st.start_incline_pct}%`;
+    $$(".gm-speed").forEach((r) => r.classList.toggle("off", st.profile === "climb"));
+    $$(".gm-climb").forEach((r) => r.classList.toggle("off", st.profile === "aim"));
+    const games = st.games || [];
+    if (games.join("|") !== gamesShown) {
+      gamesShown = games.join("|");
+      const box = $("#gm-games");
+      box.innerHTML = "";
+      games.forEach((name) => {
+        const b = document.createElement("button");
+        b.textContent = name;
+        b.title = `Remove ${name}`;
+        b.addEventListener("click", () => saveGame({ remove_game: name }));
+        box.appendChild(b);
+      });
+      if (!games.length) box.textContent = "None yet";
+    }
+    const add = $("#gm-add");
+    const canAdd = g.last_app && !games.includes(g.last_app);
+    add.classList.toggle("hidden", !canAdd);
+    if (canAdd) add.textContent = `Add ${g.last_app} (the last app you used)`;
+  }
+  async function saveGame(obj) {
+    try { S.game = await api("POST", "/api/game", obj); } catch (e) { toast(e.message); }
+    render();
   }
 
   // ---- polling
@@ -313,6 +373,16 @@
     const stepMax = (d) => saveSetting({ max_speed_mph: Math.round((settings.max_speed_mph + d) * 10) / 10 });
     $("#max-down").addEventListener("click", () => stepMax(-0.1));
     $("#max-up").addEventListener("click", () => stepMax(0.1));
+    $("#btn-game").addEventListener("click", () => saveGame({ enabled: !(S.game && S.game.enabled) }));
+    $$("#gm-on button").forEach((b) => b.addEventListener("click", () => saveGame({ enabled: b.dataset.on === "1" })));
+    $$("#gm-profile button").forEach((b) => b.addEventListener("click", () => saveGame({ profile: b.dataset.profile })));
+    $$("[data-gm]").forEach((b) => b.addEventListener("click", () => {
+      const key = b.dataset.gm, st = (S.game && S.game.settings) || {};
+      if (st[key] === undefined) return;
+      const v = Math.round((st[key] + parseFloat(b.dataset.d)) * 10) / 10;
+      saveGame({ [key]: v });
+    }));
+    $("#gm-add").addEventListener("click", () => S.game && S.game.last_app && saveGame({ add_game: S.game.last_app }));
     $$("#kcal-seg button").forEach((b) => b.addEventListener("click", () => saveSetting({ calorie_source: b.dataset.src })));
     const stepWt = (d) => saveSetting({ weight_lb: (settings.weight_lb || 187) + d, calorie_source: "weight" });
     $("#wt-down").addEventListener("click", () => stepWt(-1));

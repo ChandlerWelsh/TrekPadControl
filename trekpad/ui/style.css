@@ -111,6 +111,19 @@ body.offline .strip .sgroup { opacity: .45; }
 .actions button { height: 48px; font-size: 15px; }
 .actions .stop { font-size: 17px; }
 .foot { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: var(--muted); }
+.sr-right { display: flex; align-items: center; gap: 4px; }
+button.chip { height: 28px; padding: 0 10px; border-radius: 14px; font-size: 12px; color: var(--muted); background: transparent; }
+button.chip svg { width: 16px; height: 16px; }
+button.chip.on { background: var(--accent); color: var(--on-accent); border-color: transparent; font-weight: 600; }
+button.chip.on.paused { background: var(--warn); }
+.gbadge { display: flex; align-items: center; gap: 3px; font-size: 12px; color: var(--muted); }
+.gbadge svg { width: 15px; height: 15px; }
+.gbadge.hard { color: var(--accent-text); font-weight: 600; }
+.gbadge.paused { color: var(--warn); }
+.gm-gap { margin-top: 8px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.chips button { height: 28px; padding: 0 10px; border-radius: 14px; font-size: 12px; }
+.chips button::after { content: "×"; color: var(--muted); margin-left: 2px; }
 .health { display: flex; align-items: center; gap: 6px; }
 .health .heart { width: 15px; height: 15px; color: var(--stop); }
 .rec { display: flex; align-items: center; gap: 6px; }
