@@ -19,6 +19,7 @@ import os
 import re
 import threading
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -34,8 +35,30 @@ OVER_STATES = {"PostGame", "GameOver", "Disconnect"}
 INTRO_STATES = {"WaitingForPlayersToJoin", "MatchIntro", "WaitForMapToLoad"}
 
 
+RE_TS = re.compile(r"^(\d\d)/(\d\d) (\d\d):(\d\d):(\d\d)")
+
+
+def line_time(line: str, now: datetime | None = None) -> float | None:
+    """Epoch seconds from the "MM/DD HH:MM:SS" prefix (the log has no year)."""
+    m = RE_TS.match(line)
+    if not m:
+        return None
+    now = now or datetime.now()
+    mo, d, h, mi, s = (int(x) for x in m.groups())
+    try:
+        t = datetime(now.year, mo, d, h, mi, s)
+    except ValueError:
+        return None
+    if t - now > timedelta(days=1):   # a December log read in January
+        t = t.replace(year=now.year - 1)
+    return t.timestamp()
+
+
 class DeadlockLogParser:
-    """Feed console lines; returns events: "match_start", "death", "respawn", "match_end"."""
+    """Feed console lines; returns events: "match_start", "death", "respawn", "match_end".
+    Also keeps match stats (deaths, time dead) for the app's match card."""
+
+    GAME = "deadlock"
 
     def __init__(self):
         self.slot: str | None = None      # your player slot (from "Added prediction ... (name)")
@@ -43,6 +66,17 @@ class DeadlockLogParser:
         self.in_match = False
         self.dead = False
         self.intro_seen = False   # saw the match intro since the last match/disconnect
+        self.started_at: float | None = None
+        self.deaths = 0
+        self.dead_since: float | None = None
+        self.time_dead_s = 0.0
+        self.last_match: dict | None = None
+
+    def info(self) -> dict:
+        """Snapshot for the UI. Times are epoch seconds; the UI adds the live parts."""
+        return {"game": self.GAME, "in_match": self.in_match, "started_at": self.started_at,
+                "deaths": self.deaths, "dead": self.dead, "dead_since": self.dead_since,
+                "time_dead_s": round(self.time_dead_s), "last_match": self.last_match}
 
     def feed(self, line: str) -> list[str]:
         events: list[str] = []
@@ -53,13 +87,15 @@ class DeadlockLogParser:
                 self.intro_seen = True
             elif state == IN_PROGRESS and not self.in_match and self.intro_seen:
                 self.in_match, self.dead, self.intro_seen = True, False, False
+                self.started_at = line_time(line) or time.time()
+                self.deaths, self.dead_since, self.time_dead_s = 0, None, 0.0
                 events.append("match_start")
             elif self.in_match and (state in OVER_STATES or state.startswith("Post")):
-                events += self._end()
+                events += self._end(line)
             return events
         if RE_DISCONNECT.search(line):
             if self.in_match:
-                return self._end()
+                return self._end(line)
             self.intro_seen = False
             return []
         m = RE_ADDED.search(line)
@@ -67,15 +103,28 @@ class DeadlockLogParser:
             self.slot, self.player = m.group(1), m.group(2)
             if self.dead:
                 self.dead = False
+                self._close_death(line)
                 events.append("respawn")
             return events
         m = RE_SHUTDOWN.search(line)
         if m and self.in_match and m.group(1) == self.slot and not self.dead:
             self.dead = True
+            self.deaths += 1
+            self.dead_since = line_time(line) or time.time()
             events.append("death")
         return events
 
-    def _end(self) -> list[str]:
+    def _close_death(self, line: str):
+        if self.dead_since is not None:
+            self.time_dead_s += max(0.0, (line_time(line) or time.time()) - self.dead_since)
+            self.dead_since = None
+
+    def _end(self, line: str) -> list[str]:
+        self._close_death(line)
+        end = line_time(line) or time.time()
+        if self.started_at is not None:
+            self.last_match = {"ended_at": end, "duration_s": round(end - self.started_at),
+                               "deaths": self.deaths, "time_dead_s": round(self.time_dead_s)}
         self.in_match, self.dead, self.intro_seen = False, False, False
         return ["match_end"]
 

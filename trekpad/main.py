@@ -159,6 +159,8 @@ def main():
     # Real deaths/respawns from Deadlock's console log (needs the -condebug launch option).
     deadlock_log = DeadlockLogWatcher(game.event)
     game.events_live = lambda: deadlock_log.available
+    # Deadlock's match state and stats (None while its log isn't live, e.g. playing another game).
+    game.match_info = lambda: deadlock_log.parser.info() if deadlock_log.available else None
 
     hk = cfg["hotkeys"]
     actions = {

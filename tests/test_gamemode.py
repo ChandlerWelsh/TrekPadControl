@@ -265,6 +265,56 @@ class GameModeTests(unittest.TestCase):
         self.assertEqual(self.beeps, [])
         self.assertEqual(self.pad.state["speed_mph"], 2.0)
 
+    # ---------------------------------------------------------------- Deadlock match state
+    def match(self, in_match):
+        self.info = {"game": "deadlock", "in_match": in_match, "deaths": 0}
+        self.gm.match_info = lambda: self.info
+
+    def test_waits_for_the_match_to_start(self):
+        self.match(False)
+        self.sig["idle_s"] = 30          # idle in the hideout or menus: still nothing
+        self.run_for(30)
+        self.assertEqual(self.pad.commands, [])
+        self.assertEqual(self.gm.status()["state"], "waiting_match")
+        self.info["in_match"] = True
+        self.sig["idle_s"] = 0
+        self.run_for(25)
+        self.assertEqual(self.pad.state["speed_mph"], 2.0)
+        self.assertEqual(self.gm.status()["state"], "playing")
+
+    def test_no_climb_outside_a_match(self):
+        self.cfg["profile"] = "climb"
+        self.cfg["climb_every_min"] = 1
+        self.match(False)
+        self.run_for(180)
+        self.assertEqual(self.inclines(), [])
+
+    def test_match_end_brings_the_speed_back_down_then_leaves_the_belt_alone(self):
+        self.match(True)
+        self.sig["idle_s"] = 30          # dead/idle: hard pace
+        self.run_for(40)
+        self.assertEqual(self.pad.state["speed_mph"], 2.8)
+        self.info["in_match"] = False     # match over
+        self.run_for(20)
+        self.assertEqual(self.pad.state["speed_mph"], 2.0)
+        self.assertEqual(self.gm.status()["state"], "waiting_match")
+        n = len(self.pad.commands)
+        self.pad.state["speed_mph"] = 1.4  # you change it between matches: game mode doesn't react
+        self.run_for(30)
+        self.assertEqual(len(self.pad.commands), n)
+
+    def test_another_game_in_front_ignores_deadlocks_match_state(self):
+        self.cfg["games"] = ["deadlock.exe", "dota2.exe"]
+        self.match(False)
+        self.sig["exe"] = "dota2.exe"
+        self.run_for(25)
+        self.assertEqual(self.pad.state["speed_mph"], 2.0)   # plays as before
+        self.assertEqual(self.gm.status()["state"], "playing")
+
+    def test_status_includes_match_stats(self):
+        self.match(True)
+        self.assertEqual(self.gm.status()["match"]["game"], "deadlock")
+
 
 if __name__ == "__main__":
     unittest.main()

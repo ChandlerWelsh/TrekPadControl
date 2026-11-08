@@ -35,6 +35,8 @@ from .ftms import PAD_MAX_INCLINE, PAD_MAX_MPH, PAD_MIN_INCLINE, PAD_MIN_MPH
 log = logging.getLogger(__name__)
 
 PROFILES = ("aim", "climb", "both")
+# Which executables belong to each game source (a Dota 2 source would add "dota2": {"dota2.exe"}).
+GAME_EXES = {"deadlock": {"deadlock.exe", "project8.exe"}}
 EVENTS = ("death", "respawn", "match_start", "match_end")
 
 STEP_MPH = 0.1
@@ -56,12 +58,13 @@ LABELS = {
     "off": "Off",
     "belt_stopped": "Waiting for the belt",
     "not_in_game": "Waiting for a game",
+    "waiting_match": "Waiting for the match to start",
     "playing": "Playing · easy pace",
     "idle": "Idle · hard pace",
     "dead": "Dead · hard pace",
     "paused": "Paused · you changed the speed",
 }
-SHORT = {"off": "", "belt_stopped": "waiting", "not_in_game": "waiting", "playing": "easy",
+SHORT = {"off": "", "belt_stopped": "waiting", "not_in_game": "waiting", "waiting_match": "waiting", "playing": "easy",
          "idle": "hard", "dead": "hard", "paused": "paused"}
 EXE_RE = re.compile(r"^[\w .()+-]{1,80}\.exe$", re.IGNORECASE)
 
@@ -99,6 +102,8 @@ class GameMode:
         self._target_incline: int | None = None
         self._inc_offset = 0  # your own incline changes, added to the climb
         self.events_live = lambda: False  # True while a game event source (Deadlock's log) is live
+        # -> None (no live game source) or {"game": "deadlock", "in_match": bool, deaths, ...}
+        self.match_info = lambda: None
         self._reset_run()
 
     def _reset_run(self):
@@ -219,6 +224,13 @@ class GameMode:
         except Exception:
             return False
 
+    def _match_info(self) -> dict | None:
+        try:
+            return self.match_info()
+        except Exception:
+            log.debug("match info failed", exc_info=True)
+            return None
+
     def status(self) -> dict:
         with self._lock:
             c = self.cfg
@@ -229,6 +241,7 @@ class GameMode:
                 "paused_s": paused, "target_mph": self._target_mph, "target_incline_pct": self._target_incline,
                 "in_game": self._focused_exe, "last_app": self.last_app,
                 "game_events": self._events_live(),
+                "match": self._match_info(),
                 "game_minutes": round(self._game_s / 60, 1),
                 "settings": {k: c.get(k) for k in ("profile", "games", "easy_mph", "hard_mph", "start_incline_pct",
                                                    "max_incline_pct", "climb_every_min", "idle_seconds", "sounds")},
@@ -263,9 +276,16 @@ class GameMode:
         focused = now - self._last_in_game < FOCUS_GRACE_S
         if not focused:
             self._focused_exe = None
+        # A game source (Deadlock's log) says whether a match is running. Without one, being in
+        # the game's window counts as playing (the old behaviour, e.g. for other games).
+        info = self._match_info()
+        if info and self._focused_exe and self._focused_exe not in GAME_EXES.get(info.get("game"), set()):
+            info = None   # a different game is in front: Deadlock's match state doesn't apply
+        in_match = True if info is None else bool(info.get("in_match"))
+        active = focused and in_match
 
-        # Time in game drives the climb (counted even while the belt is stopped or the mode is off).
-        if focused:
+        # Time in a match drives the climb (counted even while the belt is stopped or the mode is off).
+        if active:
             self._game_s += dt
         elif now - self._last_in_game > LEAVE_RESET_S:
             self._game_s = 0.0
@@ -284,26 +304,35 @@ class GameMode:
             self._reset_run()
             return
 
-        dead = now < self._dead_until
-        idle = float(sig.get("idle_s") or 0.0) >= c["idle_seconds"]
-        hard = focused and (dead or idle)
-        not_aiming = (not focused) or dead or idle
+        dead = in_match and now < self._dead_until
+        idle = in_match and float(sig.get("idle_s") or 0.0) >= c["idle_seconds"]
+        hard = active and (dead or idle)
+        not_aiming = (not active) or dead or idle
         profile = c.get("profile", "both")
+        limit = min(float(getattr(self.pad, "max_mph", PAD_MAX_MPH)), PAD_MAX_MPH)
 
-        if not focused:
+        if not in_match:
+            # Waiting for the match to start: leave the belt alone, except to bring the speed back
+            # to the easy pace if game mode had raised it (for example, dead when the match ended).
+            self.state = "waiting_match"
+            easy = round(max(PAD_MIN_MPH, min(c["easy_mph"], limit)), 1)
+            if not (profile in ("aim", "both") and self._sent_mph is not None and self._sent_mph > easy + 0.05):
+                self._target_mph = self._target_incline = None
+                self._reset_run()
+                return
+        elif not focused:
             self.state = "not_in_game"
         else:
             self.state = "dead" if dead else "idle" if idle else "playing"
 
         # targets
-        limit = min(float(getattr(self.pad, "max_mph", PAD_MAX_MPH)), PAD_MAX_MPH)
         target_mph = None
         if profile in ("aim", "both"):
             target_mph = round(max(PAD_MIN_MPH, min(c["hard_mph"] if hard else c["easy_mph"], limit)), 1)
         have_inc = int(round(float(snap.get("incline_pct") or 0)))
         busy = self._busy is not None and not self._busy.done()
         target_inc = None
-        if profile in ("climb", "both"):
+        if in_match and profile in ("climb", "both"):
             # you changed the incline yourself -> keep climbing from there
             if self._sent_incline is not None and have_inc != self._sent_incline and not busy \
                     and now - self._last_incline_change > 10.0:

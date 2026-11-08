@@ -77,6 +77,20 @@ class Parser(unittest.TestCase):
                         "x [Prediction] Shutdown prediction for player slot 5.  3\n")
         self.assertEqual(events.count("death"), 3)  # two in the match text + one here
 
+    def test_match_stats(self):
+        p, _ = run(HIDEOUT_AND_MATCH)
+        info = p.info()
+        self.assertEqual((info["game"], info["in_match"], info["deaths"], info["dead"]), ("deadlock", True, 2, False))
+        self.assertEqual(info["time_dead_s"], 42)      # 21 s + 21 s
+        p.feed("11/07 21:30:00 [Prediction] Shutdown prediction for player slot 5.  3 predictable")
+        self.assertTrue(p.info()["dead"])
+        self.assertEqual(p.info()["deaths"], 3)
+        p.feed("11/07 21:31:13 OnGameStateChanged: PostGame (8)")
+        lm = p.info()["last_match"]
+        self.assertEqual(lm["duration_s"], 6 * 60)      # 21:25:13 -> 21:31:13
+        self.assertEqual((lm["deaths"], lm["time_dead_s"]), (3, 42 + 73))
+        self.assertFalse(p.info()["in_match"])
+
     def test_hideout_deaths_are_ignored(self):
         _, events = run("x OnGameStateChanged: GameInProgress (7)\n"
                         "x [Prediction] Added prediction for player slot 0 (Player)\n"

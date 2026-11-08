@@ -21,6 +21,38 @@
   let settings = { theme: "system", max_speed_mph: 4, speed_step_mph: 0.1, incline_step_pct: 1 };
   let speedPreview = null, inclinePreview = null, pending = { speed: null, incline: null };
   let lastMsgAt = Date.now() / 1000, lastAskClose = Date.now() / 1000, desk = null, failures = 0;
+  let refitWindow = () => {}, matchShown = false;
+
+  // Deadlock match card: only while game mode is on and the stats come from Deadlock's log.
+  // (A Dota 2 source would report game "dota2" and get its own card.)
+  const LAST_MATCH_SHOW_S = 600;
+  function renderMatch() {
+    const g = S.game, m = g && g.match, now = Date.now() / 1000;
+    const recent = m && m.last_match && now - m.last_match.ended_at < LAST_MATCH_SHOW_S;
+    const show = !!(g && g.enabled && m && m.game === "deadlock" && (m.in_match || recent));
+    $("#match-card").classList.toggle("hidden", !show);
+    if (show !== matchShown) { matchShown = show; refitWindow(); }
+    if (!show) return;
+    const st = $("#mc-state");
+    if (m.in_match) {
+      const deadNow = m.dead && m.dead_since ? now - m.dead_since : 0;
+      $("#mc-title").textContent = "Deadlock match";
+      $("#mc-time").textContent = m.started_at ? fmtTime(now - m.started_at) : "–";
+      $("#mc-deaths").textContent = String(m.deaths);
+      $("#mc-dead").textContent = fmtTime(m.time_dead_s + deadNow);
+      st.textContent = m.dead ? `Dead · ${Math.round(deadNow)} s` : "Alive";
+      st.className = m.dead ? "mc-state dead" : "mc-state";
+    } else {
+      const lm = m.last_match;
+      $("#mc-title").textContent = "Last Deadlock match";
+      $("#mc-time").textContent = fmtTime(lm.duration_s);
+      $("#mc-deaths").textContent = String(lm.deaths);
+      $("#mc-dead").textContent = fmtTime(lm.time_dead_s);
+      st.textContent = "Finished";
+      st.className = "mc-state done";
+    }
+  }
+  setInterval(() => { if (matchShown) renderMatch(); }, 1000);   // keep the timers ticking between polls
 
   // ---- API
   async function api(method, path, body) {
@@ -216,6 +248,7 @@
     $("#rec").classList.toggle("hidden", !S.recording_workout);
 
     renderGame();
+    renderMatch();
 
     // strip
     $("#s-speed").textContent = S.connected ? speed.toFixed(1) : "–";
@@ -417,6 +450,7 @@
       }
     }
     function refit() { clearTimeout(fitTimer); fitTries = 0; fitTimer = setTimeout(fit, 400); }
+    refitWindow = () => { if (!document.body.classList.contains("mini")) refit(); };
     if (window.pywebview && window.pywebview.api) onDesk();
     window.addEventListener("pywebviewready", onDesk);
     $("#btn-min").addEventListener("click", () => desk && desk.minimize());
