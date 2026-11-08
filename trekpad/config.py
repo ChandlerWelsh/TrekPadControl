@@ -58,6 +58,8 @@ def load() -> dict:
     cfg["game_mode"] = {**DEFAULTS["game_mode"], **data.get("game_mode", {})}
     if not cfg.get("api_token"):
         cfg["api_token"] = secrets.token_urlsafe(18)
+    if not cfg.get("dota_gsi_token"):   # only accepts Dota 2 game data; it's stored in Dota's folder
+        cfg["dota_gsi_token"] = secrets.token_urlsafe(18)
     save(cfg)
     return cfg
 

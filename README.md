@@ -168,6 +168,23 @@ To watch detection live (beeps on each death and respawn):
 python research\deadlock_log_watch.py
 ```
 
+### Dota 2 setup
+
+Dota 2 officially supports Game State Integration, so TrekPad gets your hero's **alive / dead
+state, respawn countdown, kills / deaths / assists and the game clock** straight from the game.
+
+1. Steam → right-click **Dota 2** → **Properties** → **General** → **Launch Options**: add
+   `-gamestateintegration`.
+2. Start TrekPad once: it writes `gamestate_integration_trekpad.cfg` into Dota's
+   `game\dota\cfg\gamestate_integration` folder (with its own token, which only accepts game data).
+3. Restart Dota 2 (it reads the config at launch).
+
+Game mode starts at the pre-game horn (heroes on the map) and stops at the end of the game; hero
+picks and strategy time don't count. The match card shows the game clock, K / D / A, time dead and
+**Dead · respawn in 23 s**, and the result (Won / Lost) after the game. Spectating doesn't count.
+
+Game mode always uses the source for the game in front, so Deadlock and Dota 2 don't interfere.
+
 **Not supported:** Deadlock doesn't send Game State Integration data (tested twice, including with
 `-gamestateintegration`; `research\gsi_test.py` is the test). Overwolf has Deadlock events but needs
 a published Overwolf app.
@@ -293,7 +310,8 @@ powershell -ExecutionPolicy Bypass -File tools\build_exe.ps1 -Install
   `gsi_test.py` for checking Deadlock's Game State Integration (it doesn't send any), and
   `deadlock_log_watch.py` for watching death/respawn detection live
 - `trekpad/deadlock_log.py`: reads Deadlock's console log (deaths, respawns, matches, match stats)
-- `trekpad/gamemode.py`: game mode (one source per game: `GAME_EXES`; Deadlock today)
+- `trekpad/dota_gsi.py`: Dota 2 Game State Integration (received at `/api/gsi/dota2`)
+- `trekpad/gamemode.py`: game mode (one source per game: `GAME_EXES`; Deadlock and Dota 2)
 
 ## License
 

@@ -19,6 +19,7 @@ import webview
 from . import config
 from .api import ApiServer
 from .deadlock_log import DeadlockLogWatcher
+from .dota_gsi import DotaGSI, install_config as install_dota_config
 from .gamemode import GameMode, WindowsSignals, windows_beep
 from .hotkeys import Hotkeys, pretty
 from .pad import PadController
@@ -156,11 +157,17 @@ def main():
     pad = PadController(cfg.get("address") or None, cfg["max_speed_mph"], on_address_found=remember_address)
     pad.sample_listeners.append(recorder.feed)
     game = GameMode(pad, cfg["game_mode"], WindowsSignals(), beep=windows_beep, save=lambda: config.save(cfg))
-    # Real deaths/respawns from Deadlock's console log (needs the -condebug launch option).
+    # Live game sources, one per game (each returns None while that game isn't sending):
+    #   Deadlock: its console log (needs the -condebug launch option)
+    #   Dota 2: Game State Integration posted to /api/gsi/dota2 (needs -gamestateintegration)
     deadlock_log = DeadlockLogWatcher(game.event)
-    game.events_live = lambda: deadlock_log.available
-    # Deadlock's match state and stats (None while its log isn't live, e.g. playing another game).
-    game.match_info = lambda: deadlock_log.parser.info() if deadlock_log.available else None
+    dota = DotaGSI(game.event)
+    game.sources = {
+        "deadlock": lambda: deadlock_log.parser.info() if deadlock_log.available else None,
+        "dota2": dota.info,
+    }
+    dota_cfg = install_dota_config(int(cfg["api_port"]), cfg["dota_gsi_token"])
+    log.info("Dota 2 GSI config: %s", dota_cfg or "Dota 2 not found")
 
     hk = cfg["hotkeys"]
     actions = {
@@ -176,7 +183,7 @@ def main():
     info = {"lan_url": f"http://{lan_ip()}:{port}",
             "hotkeys": [[pretty(hk[n]), label] for n, (label, _) in actions.items() if hk.get(n)]}
     try:
-        api = ApiServer(pad, store, recorder, cfg, info, game=game)
+        api = ApiServer(pad, store, recorder, cfg, info, game=game, dota=dota)
     except OSError:
         log.error("port %s busy", port)
         webview.create_window("TrekPad", html=f"<body style='font:14px Segoe UI;padding:20px'>"

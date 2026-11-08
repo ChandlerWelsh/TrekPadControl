@@ -35,8 +35,9 @@ MIN_WEIGHT_LB, MAX_WEIGHT_LB = 50, 600
 
 class ApiServer:
     def __init__(self, pad, store, recorder, cfg: dict, info: dict | None = None, host: str = "0.0.0.0",
-                 game=None):
+                 game=None, dota=None):
         self.pad, self.store, self.recorder, self.cfg, self.game = pad, store, recorder, cfg, game
+        self.dota = dota
         self.info = info or {}
         self.httpd = ThreadingHTTPServer((host, int(cfg["api_port"])), self._handler_class())
         self.httpd.daemon_threads = True
@@ -87,6 +88,8 @@ class ApiServer:
                     name, ctype = STATIC[path]
                     return self._send(200, (UI_DIR / name).read_bytes(), ctype)
                 path = path.rstrip("/")
+                if method == "POST" and path == "/api/gsi/dota2":
+                    return self._dota_gsi()
                 q = {k: v[-1] for k, v in parse_qs(url.query).items()}
                 token = self.headers.get("X-Token") or q.pop("token", "")
                 if not path.startswith("/api"):
@@ -115,6 +118,24 @@ class ApiServer:
                 except Exception as e:
                     log.exception("api error")
                     return self._json(500, {"error": str(e)})
+
+            def _dota_gsi(self):
+                """Dota 2 posts its game state here. It can't send headers, so the token is in the
+                body (auth.token) and is Dota's own token, not the belt-control one."""
+                n = int(self.headers.get("Content-Length") or 0)
+                if not 0 < n <= 2_000_000:
+                    return self._json(413 if n else 400, {"error": "bad size"})
+                try:
+                    body = json.loads(self.rfile.read(n))
+                except ValueError:
+                    return self._json(400, {"error": "not JSON"})
+                token = str(((body.get("auth") or {}) if isinstance(body, dict) else {}).get("token", ""))
+                expected = str(api.cfg.get("dota_gsi_token", ""))
+                if not expected or not hmac.compare_digest(token.encode(), expected.encode()):
+                    return self._json(401, {"error": "wrong token"})
+                if api.dota is not None:
+                    api.dota.feed(body)
+                return self._send(200, b"", "text/plain")
 
             def _route(self, method, path, p):
                 pad, cfg = api.pad, api.cfg

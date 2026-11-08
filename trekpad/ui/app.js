@@ -23,33 +23,45 @@
   let lastMsgAt = Date.now() / 1000, lastAskClose = Date.now() / 1000, desk = null, failures = 0;
   let refitWindow = () => {}, matchShown = false;
 
-  // Deadlock match card: only while game mode is on and the stats come from Deadlock's log.
-  // (A Dota 2 source would report game "dota2" and get its own card.)
+  // Match card: only while game mode is on and a game source (Deadlock's log, Dota 2's GSI) is
+  // live. Each game fills the same card with its own stats.
   const LAST_MATCH_SHOW_S = 600;
+  const GAME_TITLES = { deadlock: "Deadlock", dota2: "Dota 2" };
+  const clock = (s) => (s < 0 ? "-" : "") + fmtTime(Math.abs(s));
+  function setCard(title, stats, state, cls) {
+    $("#mc-title").textContent = title;
+    ["#mc-time", "#mc-deaths", "#mc-dead"].forEach((id, i) => { $(id).textContent = stats[i][0]; });
+    ["#mc-l1", "#mc-l2", "#mc-l3"].forEach((id, i) => { $(id).textContent = stats[i][1]; });
+    const st = $("#mc-state");
+    st.textContent = state;
+    st.className = `mc-state${cls ? " " + cls : ""}`;
+  }
   function renderMatch() {
     const g = S.game, m = g && g.match, now = Date.now() / 1000;
     const recent = m && m.last_match && now - m.last_match.ended_at < LAST_MATCH_SHOW_S;
-    const show = !!(g && g.enabled && m && m.game === "deadlock" && (m.in_match || recent));
+    const show = !!(g && g.enabled && m && GAME_TITLES[m.game] && (m.in_match || recent));
     $("#match-card").classList.toggle("hidden", !show);
     if (show !== matchShown) { matchShown = show; refitWindow(); }
     if (!show) return;
-    const st = $("#mc-state");
-    if (m.in_match) {
-      const deadNow = m.dead && m.dead_since ? now - m.dead_since : 0;
-      $("#mc-title").textContent = "Deadlock match";
-      $("#mc-time").textContent = m.started_at ? fmtTime(now - m.started_at) : "–";
-      $("#mc-deaths").textContent = String(m.deaths);
-      $("#mc-dead").textContent = fmtTime(m.time_dead_s + deadNow);
-      st.textContent = m.dead ? `Dead · ${Math.round(deadNow)} s` : "Alive";
-      st.className = m.dead ? "mc-state dead" : "mc-state";
-    } else {
+    const name = GAME_TITLES[m.game];
+    const deadNow = m.in_match && m.dead && m.dead_since ? now - m.dead_since : 0;
+    if (!m.in_match) {
       const lm = m.last_match;
-      $("#mc-title").textContent = "Last Deadlock match";
-      $("#mc-time").textContent = fmtTime(lm.duration_s);
-      $("#mc-deaths").textContent = String(lm.deaths);
-      $("#mc-dead").textContent = fmtTime(lm.time_dead_s);
-      st.textContent = "Finished";
-      st.className = "mc-state done";
+      const second = m.game === "dota2" ? [`${lm.kills} / ${lm.deaths} / ${lm.assists}`, "K / D / A"] : [String(lm.deaths), "Deaths"];
+      const result = lm.won === true ? "Won" : lm.won === false ? "Lost" : "Finished";
+      setCard(`Last ${name} match`, [[fmtTime(lm.duration_s), "Match time"], second, [fmtTime(lm.time_dead_s), "Time dead"]],
+              result, "done");
+    } else if (m.game === "dota2") {
+      const t = typeof m.clock_time === "number" ? m.clock_time + (m.paused ? 0 : now - m.clock_at) : null;
+      const respawn = m.respawn_at ? Math.max(0, Math.ceil(m.respawn_at - now)) : null;
+      const state = m.paused ? "Paused" : m.dead ? (respawn !== null ? `Dead · respawn in ${respawn} s` : "Dead") : "Alive";
+      setCard(`${name}${m.hero ? " · " + m.hero : ""}`,
+              [[t === null ? "–" : clock(Math.floor(t)), "Game clock"], [`${m.kills} / ${m.deaths} / ${m.assists}`, "K / D / A"],
+               [fmtTime(m.time_dead_s + deadNow), "Time dead"]], state, m.dead ? "dead" : m.paused ? "done" : "");
+    } else {
+      setCard(`${name} match`, [[m.started_at ? fmtTime(now - m.started_at) : "–", "Match time"], [String(m.deaths), "Deaths"],
+               [fmtTime(m.time_dead_s + deadNow), "Time dead"]], m.dead ? `Dead · ${Math.round(deadNow)} s` : "Alive",
+              m.dead ? "dead" : "");
     }
   }
   setInterval(() => { if (matchShown) renderMatch(); }, 1000);   // keep the timers ticking between polls
@@ -292,7 +304,7 @@
     if (g.enabled && g.state === "paused") line += ` (${g.paused_s} s)`;
     if (g.enabled && g.target_mph) line += ` · target ${g.target_mph.toFixed(1)} mph`;
     if (g.enabled && g.target_incline_pct !== null && g.target_incline_pct !== undefined) line += ` · ${g.target_incline_pct}%`;
-    if (g.enabled) line += g.game_events ? " · deaths from Deadlock" : " · idle detection only";
+    if (g.enabled) line += g.game_events ? ` · deaths from ${g.source_name}` : " · idle detection only";
     $("#gm-state").textContent = `Now: ${line}`;
     $("#gm-easy").textContent = st.easy_mph !== undefined ? st.easy_mph.toFixed(1) : "–";
     $("#gm-hard").textContent = st.hard_mph !== undefined ? st.hard_mph.toFixed(1) : "–";

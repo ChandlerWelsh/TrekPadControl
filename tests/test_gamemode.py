@@ -268,7 +268,7 @@ class GameModeTests(unittest.TestCase):
     # ---------------------------------------------------------------- Deadlock match state
     def match(self, in_match):
         self.info = {"game": "deadlock", "in_match": in_match, "deaths": 0}
-        self.gm.match_info = lambda: self.info
+        self.gm.sources = {"deadlock": lambda: self.info}
 
     def test_waits_for_the_match_to_start(self):
         self.match(False)
@@ -313,7 +313,30 @@ class GameModeTests(unittest.TestCase):
 
     def test_status_includes_match_stats(self):
         self.match(True)
-        self.assertEqual(self.gm.status()["match"]["game"], "deadlock")
+        self.gm.tick()
+        st = self.gm.status()
+        self.assertEqual(st["match"]["game"], "deadlock")
+        self.assertEqual(st["source_name"], "Deadlock")
+
+    def test_uses_the_source_for_the_game_in_front(self):
+        dota = {"game": "dota2", "in_match": True, "deaths": 1}
+        self.match(False)                                     # Deadlock: no match
+        self.gm.sources["dota2"] = lambda: dota
+        self.sig["exe"] = "dota2.exe"                         # counts as a game: it has a source
+        self.run_for(25)
+        self.assertEqual(self.gm.status()["source_name"], "Dota 2")
+        self.assertEqual(self.pad.state["speed_mph"], 2.0)
+        dota["in_match"] = False                              # Dota match over -> waits
+        self.run_for(10)
+        self.assertEqual(self.gm.status()["state"], "waiting_match")
+
+    def test_looking_at_trekpad_shows_the_game_with_a_match(self):
+        self.match(False)
+        self.gm.sources["dota2"] = lambda: {"game": "dota2", "in_match": True}
+        self.sig.update(exe="trekpad.exe", self=True)
+        self.t += 10
+        self.gm.tick()
+        self.assertEqual(self.gm.status()["match"]["game"], "dota2")
 
 
 if __name__ == "__main__":

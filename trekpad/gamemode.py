@@ -36,7 +36,8 @@ log = logging.getLogger(__name__)
 
 PROFILES = ("aim", "climb", "both")
 # Which executables belong to each game source (a Dota 2 source would add "dota2": {"dota2.exe"}).
-GAME_EXES = {"deadlock": {"deadlock.exe", "project8.exe"}}
+GAME_EXES = {"deadlock": {"deadlock.exe", "project8.exe"}, "dota2": {"dota2.exe"}}
+GAME_NAMES = {"deadlock": "Deadlock", "dota2": "Dota 2"}
 EVENTS = ("death", "respawn", "match_start", "match_end")
 
 STEP_MPH = 0.1
@@ -101,9 +102,9 @@ class GameMode:
         self._target_mph: float | None = None
         self._target_incline: int | None = None
         self._inc_offset = 0  # your own incline changes, added to the climb
-        self.events_live = lambda: False  # True while a game event source (Deadlock's log) is live
-        # -> None (no live game source) or {"game": "deadlock", "in_match": bool, deaths, ...}
-        self.match_info = lambda: None
+        # One live game source per game: name -> callable returning None (not live) or
+        # {"game": name, "in_match": bool, "deaths": int, ...}. Deadlock's log, Dota 2's GSI.
+        self.sources: dict = {}
         self._reset_run()
 
     def _reset_run(self):
@@ -218,18 +219,40 @@ class GameMode:
         if "enabled" in p:
             self.set_enabled(as_bool(p["enabled"]))
 
+    def _infos(self) -> dict:
+        out = {}
+        for name, fn in list(self.sources.items()):
+            try:
+                info = fn()
+            except Exception:
+                log.debug("game source %s failed", name, exc_info=True)
+                info = None
+            if info:
+                out[name] = info
+        return out
+
     def _events_live(self) -> bool:
-        try:
-            return bool(self.events_live())
-        except Exception:
-            return False
+        return bool(self._infos())
+
+    def _match_status(self) -> dict:
+        m = self._match_info()
+        return {"match": m, "game_events": m is not None,
+                "source_name": GAME_NAMES.get(m.get("game"), m.get("game")) if m else None}
 
     def _match_info(self) -> dict | None:
-        try:
-            return self.match_info()
-        except Exception:
-            log.debug("match info failed", exc_info=True)
+        """The live source for the game in front; with no game in front (e.g. looking at
+        TrekPad), whichever game has a match running, else the most recent finished match."""
+        infos = self._infos()
+        if self._focused_exe:
+            for name, exes in GAME_EXES.items():
+                if self._focused_exe in exes:
+                    return infos.get(name)
             return None
+        live = [i for i in infos.values() if i.get("in_match")]
+        if live:
+            return live[0]
+        done = [i for i in infos.values() if i.get("last_match")]
+        return max(done, key=lambda i: i["last_match"].get("ended_at") or 0) if done else None
 
     def status(self) -> dict:
         with self._lock:
@@ -240,8 +263,7 @@ class GameMode:
                 "label": LABELS.get(self.state, self.state), "short": SHORT.get(self.state, ""),
                 "paused_s": paused, "target_mph": self._target_mph, "target_incline_pct": self._target_incline,
                 "in_game": self._focused_exe, "last_app": self.last_app,
-                "game_events": self._events_live(),
-                "match": self._match_info(),
+                **self._match_status(),
                 "game_minutes": round(self._game_s / 60, 1),
                 "settings": {k: c.get(k) for k in ("profile", "games", "easy_mph", "hard_mph", "start_incline_pct",
                                                    "max_incline_pct", "climb_every_min", "idle_seconds", "sounds")},
@@ -270,17 +292,17 @@ class GameMode:
         if exe and not sig.get("self"):
             self.last_app = exe
         games = {g.lower() for g in c.get("games", [])}
+        for name in self.sources:                       # games with a source always count
+            games |= GAME_EXES.get(name, set())
         if exe in games:
             self._last_in_game = now
             self._focused_exe = exe
         focused = now - self._last_in_game < FOCUS_GRACE_S
         if not focused:
             self._focused_exe = None
-        # A game source (Deadlock's log) says whether a match is running. Without one, being in
-        # the game's window counts as playing (the old behaviour, e.g. for other games).
+        # The game's live source (Deadlock's log, Dota 2's GSI) says whether a match is running.
+        # Without one, being in the game's window counts as playing (e.g. for other games).
         info = self._match_info()
-        if info and self._focused_exe and self._focused_exe not in GAME_EXES.get(info.get("game"), set()):
-            info = None   # a different game is in front: Deadlock's match state doesn't apply
         in_match = True if info is None else bool(info.get("in_match"))
         active = focused and in_match
 
