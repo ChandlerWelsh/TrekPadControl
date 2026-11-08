@@ -18,6 +18,7 @@ import webview
 
 from . import config
 from .api import ApiServer
+from .deadlock_log import DeadlockLogWatcher
 from .gamemode import GameMode, WindowsSignals, windows_beep
 from .hotkeys import Hotkeys, pretty
 from .pad import PadController
@@ -155,6 +156,9 @@ def main():
     pad = PadController(cfg.get("address") or None, cfg["max_speed_mph"], on_address_found=remember_address)
     pad.sample_listeners.append(recorder.feed)
     game = GameMode(pad, cfg["game_mode"], WindowsSignals(), beep=windows_beep, save=lambda: config.save(cfg))
+    # Real deaths/respawns from Deadlock's console log (needs the -condebug launch option).
+    deadlock_log = DeadlockLogWatcher(game.event)
+    game.events_live = lambda: deadlock_log.available
 
     hk = cfg["hotkeys"]
     actions = {
@@ -182,6 +186,7 @@ def main():
     pad.start_background()
     api.start()
     game.start()
+    deadlock_log.start()
 
     hotkeys = Hotkeys([(hk[name], fn) for name, (_, fn) in actions.items() if hk.get(name)])
     hotkeys.start()
@@ -201,6 +206,7 @@ def main():
 
     log.info("closing")
     game.stop()
+    deadlock_log.stop()
     recorder.finish()
     pad.shutdown(stop_belt=bridge._stop_on_exit)
     api.stop()

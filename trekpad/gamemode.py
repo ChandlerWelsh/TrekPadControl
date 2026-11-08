@@ -98,6 +98,7 @@ class GameMode:
         self._target_mph: float | None = None
         self._target_incline: int | None = None
         self._inc_offset = 0  # your own incline changes, added to the climb
+        self.events_live = lambda: False  # True while a game event source (Deadlock's log) is live
         self._reset_run()
 
     def _reset_run(self):
@@ -212,6 +213,12 @@ class GameMode:
         if "enabled" in p:
             self.set_enabled(as_bool(p["enabled"]))
 
+    def _events_live(self) -> bool:
+        try:
+            return bool(self.events_live())
+        except Exception:
+            return False
+
     def status(self) -> dict:
         with self._lock:
             c = self.cfg
@@ -221,6 +228,7 @@ class GameMode:
                 "label": LABELS.get(self.state, self.state), "short": SHORT.get(self.state, ""),
                 "paused_s": paused, "target_mph": self._target_mph, "target_incline_pct": self._target_incline,
                 "in_game": self._focused_exe, "last_app": self.last_app,
+                "game_events": self._events_live(),
                 "game_minutes": round(self._game_s / 60, 1),
                 "settings": {k: c.get(k) for k in ("profile", "games", "easy_mph", "hard_mph", "start_incline_pct",
                                                    "max_incline_pct", "climb_every_min", "idle_seconds", "sounds")},

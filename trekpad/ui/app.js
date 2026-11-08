@@ -259,6 +259,7 @@
     if (g.enabled && g.state === "paused") line += ` (${g.paused_s} s)`;
     if (g.enabled && g.target_mph) line += ` · target ${g.target_mph.toFixed(1)} mph`;
     if (g.enabled && g.target_incline_pct !== null && g.target_incline_pct !== undefined) line += ` · ${g.target_incline_pct}%`;
+    if (g.enabled) line += g.game_events ? " · deaths from Deadlock" : " · idle detection only";
     $("#gm-state").textContent = `Now: ${line}`;
     $("#gm-easy").textContent = st.easy_mph !== undefined ? st.easy_mph.toFixed(1) : "–";
     $("#gm-hard").textContent = st.hard_mph !== undefined ? st.hard_mph.toFixed(1) : "–";
